@@ -184,6 +184,7 @@ class IEMOData(BaseDataset):
         self.set_name = set_name
         self.drop_rate = drop_rate
         self.full_data = full_data
+        self.fixed_missing_mode = None
         config = {
             "target_root": os.path.join(data_path, "target"),
             "feature_root": data_path,
@@ -239,49 +240,14 @@ class IEMOData(BaseDataset):
             self.label = np.argmax(self.label, axis=1)
         self.int2name = np.load(int2name_path)
         self.manual_collate_fn = True
-        self.orig_dims = self._infer_dims()
-        self.seq_len = self._infer_seq_len()
-
-    def _decode_name(self, raw_name):
-        value = raw_name
-        if isinstance(value, np.ndarray):
-            value = value[0]
-        elif isinstance(value, (list, tuple)):
-            value = value[0]
-        if isinstance(value, bytes):
-            return value.decode()
-        return value
-
-    def _get_feature_array(self, source, key):
-        value = source[key]
-        if isinstance(value, np.ndarray):
-            return value
-        return value[()]
-
-    def _infer_dims(self):
-        sample_name = self._decode_name(self.int2name[0])
-        l_feat = self._get_feature_array(self.all_L, sample_name)
-        a_feat = self._get_feature_array(self.all_A, sample_name)
-        v_feat = self._get_feature_array(self.all_V, sample_name)
-        return (l_feat.shape[1], a_feat.shape[1], v_feat.shape[1])
-
-    def _infer_seq_len(self):
-        l_len, a_len, v_len = 0, 0, 0
-        for raw_name in self.int2name:
-            sample_name = self._decode_name(raw_name)
-            l_feat = self._get_feature_array(self.all_L, sample_name)
-            a_feat = self._get_feature_array(self.all_A, sample_name)
-            v_feat = self._get_feature_array(self.all_V, sample_name)
-            l_len = max(l_len, l_feat.shape[0])
-            a_len = max(a_len, a_feat.shape[0])
-            v_len = max(v_len, v_feat.shape[0])
-        return (l_len, a_len, v_len)
 
     def __getitem__(self, index):
-        int2name = self._decode_name(self.int2name[index])
+        int2name = self.int2name[index]
+        if self.corpus_name == "IEMOCAP":
+            int2name = int2name[0].decode()
         label = torch.tensor(self.label[index])
         # process A_feat
-        A_feat = torch.from_numpy(self._get_feature_array(self.all_A, int2name)).float()
+        A_feat = torch.from_numpy(self.all_A[int2name][()]).float()
         if self.A_type == "comparE" or self.A_type == "comparE_raw":
             A_feat = (
                 self.normalize_on_utt(A_feat)
@@ -289,9 +255,9 @@ class IEMOData(BaseDataset):
                 else self.normalize_on_trn(A_feat)
             )
         # process V_feat
-        V_feat = torch.from_numpy(self._get_feature_array(self.all_V, int2name)).float()
+        V_feat = torch.from_numpy(self.all_V[int2name][()]).float()
         # process L_feat
-        L_feat = torch.from_numpy(self._get_feature_array(self.all_L, int2name)).float()
+        L_feat = torch.from_numpy(self.all_L[int2name][()]).float()
         X = (L_feat, A_feat, V_feat)
         missing_code = self.get_missing_mode()
         return X, label, missing_code
@@ -317,12 +283,14 @@ class IEMOData(BaseDataset):
         return features
 
     def get_dim(self):
-        return self.orig_dims
+        return (1024, 130, 342)
 
     def get_seq_len(self):
-        return self.seq_len
+        return (22, 350, 50)
 
     def get_missing_mode(self):
+        if self.fixed_missing_mode is not None:
+            return self.fixed_missing_mode
         if self.full_data:
             return 6
         if random.random() < self.drop_rate:
@@ -340,11 +308,9 @@ class IEMOData(BaseDataset):
         return mean, std
 
     def collate_fn(self, batch):
-        max_length = self.seq_len[1]
+        max_length = 350
         A = [
-            sample[0][1][:max_length]
-            if len(sample[0][1]) >= max_length
-            else torch.cat(
+            torch.cat(
                 [
                     sample[0][1],
                     torch.zeros(

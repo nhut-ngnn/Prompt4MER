@@ -13,6 +13,7 @@ class SIMSData(Dataset):
         self.split = split
         self.drop_rate = drop_rate
         self.full_data = full_data
+        self.fixed_missing_mode = None
         self.orig_dims = [
             self.data['text'][0].shape[1],
             self.data['audio'][0].shape[1],
@@ -29,6 +30,8 @@ class SIMSData(Dataset):
         return self.data['audio'].shape[0]
     
     def get_missing_mode(self):
+        if self.fixed_missing_mode is not None:
+            return self.fixed_missing_mode
         if self.full_data:
             return 6
         if random.random() < self.drop_rate:

@@ -35,6 +35,7 @@ class MOSIData(Dataset):
 
         self.drop_rate = drop_rate
         self.full_data = full_data
+        self.fixed_missing_mode = None
         self.n_modalities = 3  # vision/ text/ audio
 
     def get_n_modalities(self):
@@ -50,6 +51,8 @@ class MOSIData(Dataset):
         return self.labels.shape[1], self.labels.shape[2]
 
     def get_missing_mode(self):
+        if self.fixed_missing_mode is not None:
+            return self.fixed_missing_mode
         if self.full_data:
             return 6
         if random.random() < self.drop_rate:

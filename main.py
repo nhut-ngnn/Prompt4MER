@@ -17,6 +17,30 @@ parser.add_argument(
     help="name of the model to use (Transformer, etc.)",
 )
 parser.add_argument(
+    "--eval_only",
+    action="store_true",
+    help="evaluate a saved checkpoint without training",
+)
+parser.add_argument(
+    "--checkpoint",
+    type=str,
+    default=None,
+    help="path to a saved checkpoint for eval-only mode",
+)
+parser.add_argument(
+    "--eval_split",
+    type=str,
+    default="test",
+    choices=["valid", "test"],
+    help="split to use in eval-only mode",
+)
+parser.add_argument(
+    "--eval_modalities",
+    type=str,
+    default=None,
+    help="comma-separated eval-only modality cases: a,t,v,at,av,tv",
+)
+parser.add_argument(
     "--dataset",
     type=str,
     default="mosi",
@@ -27,35 +51,6 @@ parser.add_argument(
     type=str,
     default=None,
     help="path for storing the dataset",
-)
-parser.add_argument(
-    "--l_type",
-    type=str,
-    default="bert_large",
-    help="IEMOCAP text feature name under L/<name>.h5",
-)
-parser.add_argument(
-    "--a_type",
-    type=str,
-    default="comparE",
-    help="IEMOCAP audio feature name under A/<name>.h5",
-)
-parser.add_argument(
-    "--v_type",
-    type=str,
-    default="denseface",
-    help="IEMOCAP visual feature name under V/<name>.h5",
-)
-parser.add_argument(
-    "--cv_no",
-    type=int,
-    default=1,
-    help="IEMOCAP cross-validation index used in target/<cv_no>",
-)
-parser.add_argument(
-    "--in_mem",
-    action="store_true",
-    help="load IEMOCAP h5 features into memory",
 )
 
 # Dropouts
@@ -123,6 +118,7 @@ args = parser.parse_args()
 
 
 dataset = str.lower(args.dataset.strip())
+args.dataset = dataset
 
 output_dim_dict = {"mosi": 1, "mosei": 1, "sims": 1, "iemocap": 4}
 

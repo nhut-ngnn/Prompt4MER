@@ -30,6 +30,7 @@ class IEMOCAPFeatureData(Dataset):
         split_name = self.SPLIT_MAP.get(split_type, split_type)
         self.drop_rate = drop_rate
         self.full_data = full_data
+        self.fixed_missing_mode = None
 
         pkl_path = self._resolve_pkl_path(
             data_path=data_path,
@@ -143,6 +144,8 @@ class IEMOCAPFeatureData(Dataset):
         return self.seq_len
 
     def get_missing_mode(self):
+        if self.fixed_missing_mode is not None:
+            return self.fixed_missing_mode
         if self.full_data:
             return 6
         if random.random() < self.drop_rate:
