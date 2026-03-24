@@ -93,7 +93,7 @@ class MULTModel(nn.Module):
             attn_mask=self.attn_mask,
         )
 
-    def forward(self, x_l, x_a, x_v, missing_mod=None):
+    def forward(self, x_l, x_a, x_v, missing_mod=None, return_aux=False):
         x_l = F.dropout(
             x_l.transpose(1, 2), p=self.embed_dropout, training=self.training
         )
@@ -141,6 +141,8 @@ class MULTModel(nn.Module):
         last_hs_proj += last_hs
 
         output = self.out_layer(last_hs_proj)
+        if return_aux:
+            return {"logits": output}
         return output
 
 
@@ -229,6 +231,8 @@ class PromptModel(nn.Module):
         self.m_v = nn.Parameter(torch.zeros(self.vlen, 2 * self.prompt_dim))
         self.m_l = nn.Parameter(torch.zeros(self.llen, 2 * self.prompt_dim))
 
+        self._init_prompt_parameters()
+
         # 2. Crossmodal Attentions
         self.trans_l_with_a = self.get_network(self_type="la")
         self.trans_l_with_v = self.get_network(self_type="lv")
@@ -248,6 +252,19 @@ class PromptModel(nn.Module):
         self.proj1 = nn.Linear(combined_dim, combined_dim)
         self.proj2 = nn.Linear(combined_dim, combined_dim)
         self.out_layer = nn.Linear(combined_dim, output_dim)
+
+    def _init_prompt_parameters(self):
+        nn.init.normal_(self.generative_prompt, mean=0.0, std=0.02)
+        nn.init.normal_(self.promptl_m, mean=0.0, std=0.02)
+        nn.init.normal_(self.prompta_m, mean=0.0, std=0.02)
+        nn.init.normal_(self.promptv_m, mean=0.0, std=0.02)
+        nn.init.normal_(self.promptl_nm, mean=0.0, std=0.02)
+        nn.init.normal_(self.prompta_nm, mean=0.0, std=0.02)
+        nn.init.normal_(self.promptv_nm, mean=0.0, std=0.02)
+        nn.init.normal_(self.missing_type_prompt, mean=0.0, std=0.02)
+        nn.init.xavier_uniform_(self.m_a)
+        nn.init.xavier_uniform_(self.m_v)
+        nn.init.xavier_uniform_(self.m_l)
 
     def get_network(self, self_type="l", layers=-1):
         if self_type in ["l", "al", "vl"]:
@@ -379,25 +396,38 @@ class PromptModel(nn.Module):
             [a_v_lm, am_v_l, a_vm_l, am_v_lm, a_vm_lm, am_vm_l, a_v_l], dim=0
         )
 
-    def forward(self, x_l, x_a, x_v, missing_mod):
+    def forward(self, x_l, x_a, x_v, missing_mod=None, return_aux=False):
         x_l = F.dropout(
             x_l.transpose(1, 2), p=self.embed_dropout, training=self.training
         )
         x_a = x_a.transpose(1, 2)
         x_v = x_v.transpose(1, 2)
-        xx_l, xx_a, xx_v = None, None, None
-        for idx in range(len(x_l)):
-            x_l_temp, x_a_temp, x_v_temp = self.get_complete_data(
-                x_l[idx], x_a[idx], x_v[idx], missing_mod[idx]
+        if missing_mod is None:
+            missing_mod = torch.full(
+                (x_l.size(0),), 6, device=x_l.device, dtype=torch.long
             )
-            if xx_l is None:
-                xx_l = x_l_temp
-                xx_a = x_a_temp
-                xx_v = x_v_temp
-            else:
-                xx_l = torch.cat([xx_l, x_l_temp], dim=0)
-                xx_a = torch.cat([xx_a, x_a_temp], dim=0)
-                xx_v = torch.cat([xx_v, x_v_temp], dim=0)
+        else:
+            missing_mod = missing_mod.to(x_l.device).long()
+
+        mode_values = [int(mode.item()) for mode in missing_mod]
+        xx_l_list, xx_a_list, xx_v_list = [], [], []
+        real_l_list, real_a_list, real_v_list = [], [], []
+        for idx, mode in enumerate(mode_values):
+            x_l_temp, x_a_temp, x_v_temp = self.get_complete_data(
+                x_l[idx], x_a[idx], x_v[idx], mode
+            )
+            xx_l_list.append(x_l_temp)
+            xx_a_list.append(x_a_temp)
+            xx_v_list.append(x_v_temp)
+
+            if return_aux:
+                real_l_list.append(self.proj_l(x_l[idx].unsqueeze(0)))
+                real_a_list.append(self.proj_a(x_a[idx].unsqueeze(0)))
+                real_v_list.append(self.proj_v(x_v[idx].unsqueeze(0)))
+
+        xx_l = torch.cat(xx_l_list, dim=0)
+        xx_a = torch.cat(xx_a_list, dim=0)
+        xx_v = torch.cat(xx_v_list, dim=0)
 
         proj_x_a = xx_a.permute(2, 0, 1)
         proj_x_v = xx_v.permute(2, 0, 1)
@@ -405,17 +435,17 @@ class PromptModel(nn.Module):
 
         self.get_proj_matrix()
         batch_prompt = None
-        for idx in range(len(x_l)):
+        for mode in mode_values:
             if batch_prompt is None:
                 batch_prompt = torch.matmul(
-                    self.missing_type_prompt, self.mp[missing_mod[idx]]
+                    self.missing_type_prompt, self.mp[mode]
                 ).unsqueeze(dim=0)
             else:
                 batch_prompt = torch.cat(
                     [
                         batch_prompt,
                         torch.matmul(
-                            self.missing_type_prompt, self.mp[missing_mod[idx]]
+                            self.missing_type_prompt, self.mp[mode]
                         ).unsqueeze(dim=0),
                     ],
                     dim=0,
@@ -460,7 +490,23 @@ class PromptModel(nn.Module):
         last_hs_proj += last_hs
 
         output = self.out_layer(last_hs_proj)
-        return output
+        if not return_aux:
+            return output
+
+        return {
+            "logits": output,
+            "generated_features": {
+                "text": xx_l,
+                "audio": xx_a,
+                "vision": xx_v,
+            },
+            "real_features": {
+                "text": torch.cat(real_l_list, dim=0),
+                "audio": torch.cat(real_a_list, dim=0),
+                "vision": torch.cat(real_v_list, dim=0),
+            },
+            "missing_mod": missing_mod,
+        }
 
 
 class MLPLayer(nn.Module):

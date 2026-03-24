@@ -1,216 +1,122 @@
-import torch
-from torch import nn
-from src import model as mm
-from src.utils import *
-import torch.optim as optim
 import time
+
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-
-from src.eval_metrics import *
-
-EVAL_MODALITY_TO_MISSING_MODE = {
-    "av": 0,
-    "tv": 1,
-    "at": 2,
-    "v": 3,
-    "a": 4,
-    "t": 5,
-}
-
-
-def _extract_state_dict(checkpoint):
-    if isinstance(checkpoint, dict):
-        for key in [
-            "model_state_dict",
-            "state_dict",
-            "model",
-            "net",
-            "network",
-            "model_dict",
-        ]:
-            if key in checkpoint:
-                return checkpoint[key]
-        for value in checkpoint.values():
-            if isinstance(value, dict) and any(
-                torch.is_tensor(inner_value) for inner_value in value.values()
-            ):
-                return value
-    return checkpoint
+from src import model as mm
+from src.evaluate import (
+    evaluate_only,
+    evaluate_split,
+    get_underlying_model,
+    load_model,
+    print_metrics,
+    print_prompted_sample,
+)
+from src.utils import transfer_model
 
 
-def _normalize_state_dict_keys(state_dict):
-    if not isinstance(state_dict, dict):
-        return state_dict
-    if not any(key.startswith("module.") for key in state_dict.keys()):
-        return state_dict
-    return {
-        key[len("module."):] if key.startswith("module.") else key: value
-        for key, value in state_dict.items()
+def _supports_feature_alignment(model):
+    base_model = get_underlying_model(model)
+    return hasattr(base_model, "get_complete_data") and hasattr(
+        base_model, "missing_type_prompt"
+    )
+
+
+def _get_lambda_gen(epoch, hyp_params):
+    base_lambda = float(getattr(hyp_params, "lambda_gen", 0.0))
+    warmup_epochs = int(getattr(hyp_params, "lambda_gen_warmup_epochs", 0))
+    if warmup_epochs <= 0:
+        return base_lambda
+    warmup_scale = min(1.0, float(epoch) / float(warmup_epochs))
+    return base_lambda * warmup_scale
+
+
+def _compute_feature_alignment_loss(aux_outputs, missing_mod, hyp_params):
+    generated = aux_outputs.get("generated_features")
+    real = aux_outputs.get("real_features")
+    if generated is None or real is None:
+        zero = aux_outputs["logits"].new_tensor(0.0)
+        return {
+            "mse_loss": zero,
+            "cos_loss": zero,
+            "gen_loss": zero,
+            "num_active_modalities": 0,
+        }
+
+    ref_tensor = generated["text"]
+    missing_mod = missing_mod.to(ref_tensor.device).long().view(-1)
+
+    missing_masks = {
+        "text": (missing_mod == 0) | (missing_mod == 3) | (missing_mod == 4),
+        "audio": (missing_mod == 1) | (missing_mod == 3) | (missing_mod == 5),
+        "vision": (missing_mod == 2) | (missing_mod == 4) | (missing_mod == 5),
     }
 
-
-def _build_model_from_state_dict(state_dict, hyp_params):
-    state_keys = state_dict.keys()
-    is_prompt_model = any(
-        key.startswith("generative_prompt") or key.startswith("missing_type_prompt")
-        for key in state_keys
-    )
-    model_cls = getattr(mm, "PromptModel" if is_prompt_model else "MULTModel")
-    model = model_cls(hyp_params)
-    overlap = set(model.state_dict().keys()) & set(state_keys)
-    if not overlap:
-        raise ValueError(
-            "Could not find any model weights in the checkpoint. "
-            "Expected a full model, a raw state_dict, or a checkpoint dict containing model_state_dict/state_dict."
-        )
-    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-    if missing_keys:
-        print("Missing key(s) when loading checkpoint:", missing_keys)
-    if unexpected_keys:
-        print("Unexpected key(s) when loading checkpoint:", unexpected_keys)
-    return model
-
-
-def _load_model(checkpoint_path, hyp_params):
-    device = torch.device("cuda" if hyp_params.use_cuda else "cpu")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    checkpoint = _extract_state_dict(checkpoint)
-    checkpoint = _normalize_state_dict_keys(checkpoint)
-
-    if isinstance(checkpoint, nn.Module):
-        model = checkpoint
-    elif isinstance(checkpoint, dict):
-        model = _build_model_from_state_dict(checkpoint, hyp_params)
-    else:
-        raise TypeError(
-            f"Unsupported checkpoint type: {type(checkpoint)}. Expected nn.Module or state_dict-like dict."
-        )
-
-    if hyp_params.use_cuda:
-        model = model.cuda()
-    return model
-
-
-def _parse_eval_modalities(eval_modalities):
-    if eval_modalities is None:
-        return None
-
-    requested = []
-    for item in eval_modalities.split(","):
-        modality = item.strip().lower()
-        if not modality:
+    mse_terms, cos_terms, total_terms = [], [], []
+    reduction = getattr(hyp_params, "gen_loss_reduction", "mean")
+    for modality, mask in missing_masks.items():
+        if not torch.any(mask):
             continue
-        if modality not in EVAL_MODALITY_TO_MISSING_MODE:
-            valid = ", ".join(EVAL_MODALITY_TO_MISSING_MODE.keys())
-            raise ValueError(
-                f"Unsupported eval modality '{modality}'. Expected one of: {valid}."
-            )
-        if modality not in requested:
-            requested.append(modality)
-    return requested or None
 
+        mask_count = int(mask.sum().item())
+        gen_feat = generated[modality][mask].reshape(mask_count, -1)
+        real_feat = real[modality][mask]
+        if getattr(hyp_params, "detach_alignment_target", False):
+            real_feat = real_feat.detach()
+        real_feat = real_feat.reshape(mask_count, -1)
 
-def _set_fixed_missing_mode(loader, missing_mode):
-    if hasattr(loader, "dataset"):
-        loader.dataset.fixed_missing_mode = missing_mode
-
-
-def _evaluate(model, criterion, hyp_params, valid_loader, test_loader, test=False):
-    model.eval()
-    loader = test_loader if test else valid_loader
-    total_loss = 0.0
-    results = []
-    truths = []
-
-    with torch.no_grad():
-        for i_batch, (batch_X, batch_Y, missing_mod) in enumerate(loader):
-            text, audio, vision = batch_X
-            eval_attr = batch_Y.squeeze(dim=-1)  # if num of labels is 1
-
-            if hyp_params.use_cuda:
-                with torch.cuda.device(0):
-                    text, audio, vision, eval_attr = (
-                        text.cuda(),
-                        audio.cuda(),
-                        vision.cuda(),
-                        eval_attr.cuda(),
-                    )
-                    if hyp_params.dataset == "iemocap":
-                        eval_attr = eval_attr.long()
-
-            batch_size = text.size(0)
-            net = nn.DataParallel(model) if batch_size > 10 else model
-            preds = net(text, audio, vision, missing_mod)
-            if hyp_params.dataset == "iemocap":
-                preds = preds.view(-1, 4)
-                eval_attr = eval_attr.view(-1)
-            total_loss += criterion(preds, eval_attr).item() * batch_size
-
-            results.append(preds)
-            truths.append(eval_attr)
-
-    avg_loss = total_loss / (hyp_params.n_test if test else hyp_params.n_valid)
-    results = torch.cat(results)
-    truths = torch.cat(truths)
-    return avg_loss, results, truths
-
-
-def _print_metrics(hyp_params, results, truths):
-    if hyp_params.dataset == "mosei":
-        eval_mosei_senti(results, truths, True)
-    elif hyp_params.dataset == "mosi":
-        eval_mosi(results, truths, True)
-    elif hyp_params.dataset == "iemocap":
-        eval_iemocap(results, truths)
-    elif hyp_params.dataset == "sims":
-        eval_sims(results, truths)
-
-
-def evaluate_only(hyp_params, valid_loader, test_loader):
-    checkpoint_path = hyp_params.checkpoint or hyp_params.name
-    if checkpoint_path is None:
-        raise ValueError(
-            "`--eval_only` requires `--checkpoint` or `--name` to point to a saved model."
+        mse_loss = F.mse_loss(gen_feat, real_feat, reduction=reduction)
+        cos_vec = 1.0 - F.cosine_similarity(gen_feat, real_feat, dim=-1)
+        cos_loss = cos_vec.mean() if reduction == "mean" else cos_vec.sum()
+        total_loss = (
+            float(getattr(hyp_params, "alpha_mse", 1.0)) * mse_loss
+            + float(getattr(hyp_params, "beta_cos", 1.0)) * cos_loss
         )
+        mse_terms.append(mse_loss)
+        cos_terms.append(cos_loss)
+        total_terms.append(total_loss)
 
-    model = _load_model(checkpoint_path, hyp_params)
-    criterion = getattr(nn, hyp_params.criterion)()
-    test = hyp_params.eval_split == "test"
-    split_name = "test" if test else "validation"
-    requested_modalities = _parse_eval_modalities(hyp_params.eval_modalities)
+    if not total_terms:
+        zero = ref_tensor.new_tensor(0.0)
+        return {
+            "mse_loss": zero,
+            "cos_loss": zero,
+            "gen_loss": zero,
+            "num_active_modalities": 0,
+        }
 
-    if requested_modalities is None:
-        print(f"Evaluating checkpoint {checkpoint_path} on {split_name} split")
-        eval_loss, results, truths = _evaluate(
-            model, criterion, hyp_params, valid_loader, test_loader, test=test
-        )
-        print(f"{split_name.title()} Loss: {eval_loss:.4f}")
-        _print_metrics(hyp_params, results, truths)
-        return
+    if reduction == "mean":
+        mse_loss = torch.stack(mse_terms).mean()
+        cos_loss = torch.stack(cos_terms).mean()
+        gen_loss = torch.stack(total_terms).mean()
+    else:
+        mse_loss = torch.stack(mse_terms).sum()
+        cos_loss = torch.stack(cos_terms).sum()
+        gen_loss = torch.stack(total_terms).sum()
 
-    try:
-        for modality in requested_modalities:
-            missing_mode = EVAL_MODALITY_TO_MISSING_MODE[modality]
-            _set_fixed_missing_mode(valid_loader, missing_mode)
-            _set_fixed_missing_mode(test_loader, missing_mode)
-
-            print(
-                f"Evaluating checkpoint {checkpoint_path} on {split_name} split with modality '{modality}'"
-            )
-            eval_loss, results, truths = _evaluate(
-                model, criterion, hyp_params, valid_loader, test_loader, test=test
-            )
-            print(f"{split_name.title()} Loss: {eval_loss:.4f}")
-            _print_metrics(hyp_params, results, truths)
-    finally:
-        _set_fixed_missing_mode(valid_loader, None)
-        _set_fixed_missing_mode(test_loader, None)
+    return {
+        "mse_loss": mse_loss,
+        "cos_loss": cos_loss,
+        "gen_loss": gen_loss,
+        "num_active_modalities": len(total_terms),
+    }
 
 
 def initiate(hyp_params, train_loader, valid_loader, test_loader):
     if hyp_params.eval_only:
         return evaluate_only(hyp_params, valid_loader, test_loader)
+
+    if (
+        getattr(hyp_params, "enable_feature_alignment_loss", False)
+        and getattr(hyp_params, "pretrained_model", None) is None
+    ):
+        print(
+            "Feature-alignment loss is enabled, but no pretrained backbone is provided. "
+            "Running backbone training without auxiliary alignment loss."
+        )
 
     if hyp_params.pretrained_model is not None:
         model = getattr(mm, "PromptModel")(hyp_params)
@@ -242,11 +148,19 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
     criterion = settings["criterion"]
     scheduler = settings["scheduler"]
 
-    def train(model, optimizer, criterion):
+    def train_epoch(model, optimizer, criterion, epoch):
         model.train()
         num_batches = hyp_params.n_train // hyp_params.batch_size
-        proc_loss, proc_size = 0, 0
+        proc_total_loss, proc_task_loss, proc_size = 0, 0, 0
+        proc_gen_mse, proc_gen_cos, proc_gen_total = 0, 0, 0
+        use_alignment_loss = (
+            bool(getattr(hyp_params, "enable_feature_alignment_loss", False))
+            and getattr(hyp_params, "pretrained_model", None) is not None
+            and _supports_feature_alignment(model)
+        )
+        lambda_gen = _get_lambda_gen(epoch, hyp_params) if use_alignment_loss else 0.0
         start_time = time.time()
+
         for i_batch, (batch_X, batch_Y, missing_mod) in enumerate(train_loader):
             text, audio, vision = batch_X
             eval_attr = batch_Y.squeeze(-1)
@@ -265,42 +179,90 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
             batch_size = text.size(0)
             net = nn.DataParallel(model) if batch_size > 10 else model
-            preds = net(text, audio, vision, missing_mod)
+            aux_outputs = None
+            if use_alignment_loss:
+                aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
+                preds = aux_outputs["logits"]
+            else:
+                preds = net(text, audio, vision, missing_mod)
 
             if hyp_params.dataset == "iemocap":
                 preds = preds.view(-1, 4)
                 eval_attr = eval_attr.view(-1)
-            raw_loss = criterion(preds, eval_attr)
-            raw_loss.backward()
+            task_loss = criterion(preds, eval_attr)
 
+            if use_alignment_loss:
+                align_loss_terms = _compute_feature_alignment_loss(
+                    aux_outputs, missing_mod, hyp_params
+                )
+                gen_mse_loss = align_loss_terms["mse_loss"]
+                gen_cos_loss = align_loss_terms["cos_loss"]
+                gen_total_loss = align_loss_terms["gen_loss"]
+                total_loss = task_loss + lambda_gen * gen_total_loss
+            else:
+                zero = task_loss.new_tensor(0.0)
+                gen_mse_loss = zero
+                gen_cos_loss = zero
+                gen_total_loss = zero
+                total_loss = task_loss
+
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), hyp_params.clip)
             optimizer.step()
 
-            proc_loss += raw_loss.item() * batch_size
+            proc_total_loss += total_loss.item() * batch_size
+            proc_task_loss += task_loss.item() * batch_size
+            proc_gen_mse += gen_mse_loss.item() * batch_size
+            proc_gen_cos += gen_cos_loss.item() * batch_size
+            proc_gen_total += gen_total_loss.item() * batch_size
             proc_size += batch_size
+
             if i_batch % hyp_params.log_interval == 0 and i_batch > 0:
-                avg_loss = proc_loss / proc_size
+                avg_total_loss = proc_total_loss / proc_size
+                avg_task_loss = proc_task_loss / proc_size
                 elapsed_time = time.time() - start_time
-                print(
-                    "Epoch {:2d} | Batch {:3d}/{:3d} | Time/Batch(ms) {:5.2f} | Train Loss {:5.4f}".format(
-                        epoch,
-                        i_batch,
-                        num_batches,
-                        elapsed_time * 1000 / hyp_params.log_interval,
-                        avg_loss,
+                if use_alignment_loss:
+                    avg_gen_mse = proc_gen_mse / proc_size
+                    avg_gen_cos = proc_gen_cos / proc_size
+                    avg_gen_total = proc_gen_total / proc_size
+                    print(
+                        "Epoch {:2d} | Batch {:3d}/{:3d} | Time/Batch(ms) {:5.2f} | "
+                        "Task Loss {:5.4f} | Gen MSE {:5.4f} | Gen Cos {:5.4f} | "
+                        "Gen Total {:5.4f} | lambda_gen {:5.4f} | Total Loss {:5.4f}".format(
+                            epoch,
+                            i_batch,
+                            num_batches,
+                            elapsed_time * 1000 / hyp_params.log_interval,
+                            avg_task_loss,
+                            avg_gen_mse,
+                            avg_gen_cos,
+                            avg_gen_total,
+                            lambda_gen,
+                            avg_total_loss,
+                        )
                     )
-                )
-                proc_loss, proc_size = 0, 0
+                else:
+                    print(
+                        "Epoch {:2d} | Batch {:3d}/{:3d} | Time/Batch(ms) {:5.2f} | Train Loss {:5.4f}".format(
+                            epoch,
+                            i_batch,
+                            num_batches,
+                            elapsed_time * 1000 / hyp_params.log_interval,
+                            avg_total_loss,
+                        )
+                    )
+                proc_total_loss, proc_task_loss, proc_size = 0, 0, 0
+                proc_gen_mse, proc_gen_cos, proc_gen_total = 0, 0, 0
                 start_time = time.time()
 
     best_valid = 1e8
     for epoch in range(1, hyp_params.num_epochs + 1):
         start = time.time()
-        train(model, optimizer, criterion)
-        val_loss, _, _ = _evaluate(
+        train_epoch(model, optimizer, criterion, epoch)
+        val_loss, _, _ = evaluate_split(
             model, criterion, hyp_params, valid_loader, test_loader, test=False
         )
-        test_loss, _, _ = _evaluate(
+        test_loss, _, _ = evaluate_split(
             model, criterion, hyp_params, valid_loader, test_loader, test=True
         )
 
@@ -321,11 +283,11 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
             torch.save(model, hyp_params.name)
             best_valid = val_loss
 
-    model = _load_model(hyp_params.name, hyp_params)
-    best_valid_loss, valid_results, valid_truths = _evaluate(
+    model = load_model(hyp_params.name, hyp_params)
+    best_valid_loss, valid_results, valid_truths = evaluate_split(
         model, criterion, hyp_params, valid_loader, test_loader, test=False
     )
-    best_test_loss, test_results, test_truths = _evaluate(
+    best_test_loss, test_results, test_truths = evaluate_split(
         model, criterion, hyp_params, valid_loader, test_loader, test=True
     )
 
@@ -336,7 +298,8 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
         )
     )
     print("[Valid metrics]")
-    _print_metrics(hyp_params, valid_results, valid_truths)
+    print_metrics(hyp_params, valid_results, valid_truths)
     print("[Test metrics]")
-    _print_metrics(hyp_params, test_results, test_truths)
+    print_metrics(hyp_params, test_results, test_truths)
     print("=" * 50)
+    print_prompted_sample(model, test_loader, hyp_params, "Best checkpoint prompted sample")

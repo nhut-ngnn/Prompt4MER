@@ -114,6 +114,66 @@ parser.add_argument(
 parser.add_argument("--seed", type=int, default=666, help="random seed")
 parser.add_argument("--no_cuda", action="store_true", help="do not use cuda")
 parser.add_argument("--name", type=str, default=None, help="name of the trial")
+parser.add_argument(
+    "--print_prompt_sample",
+    action="store_true",
+    help="print one sample after prompt generation (PromptModel only)",
+)
+parser.add_argument(
+    "--prompt_sample_out",
+    type=str,
+    default=None,
+    help="optional .pt path to save one prompted sample",
+)
+parser.add_argument(
+    "--enable_feature_alignment_loss",
+    action="store_true",
+    help="enable auxiliary feature-alignment loss for PromptModel stage-2 training",
+)
+parser.add_argument(
+    "--lambda_gen",
+    type=float,
+    default=0.1,
+    help="weight for auxiliary feature-alignment loss",
+)
+parser.add_argument(
+    "--alpha_mse",
+    type=float,
+    default=1.0,
+    help="weight for MSE term in feature-alignment loss",
+)
+parser.add_argument(
+    "--beta_cos",
+    type=float,
+    default=1.0,
+    help="weight for cosine term in feature-alignment loss",
+)
+parser.add_argument(
+    "--gen_loss_reduction",
+    type=str,
+    default="mean",
+    choices=["mean", "sum"],
+    help="reduction mode for auxiliary feature-alignment loss",
+)
+parser.add_argument(
+    "--lambda_gen_warmup_epochs",
+    type=int,
+    default=0,
+    help="optional warm-up epochs for lambda_gen (0 disables warm-up)",
+)
+parser.add_argument(
+    "--detach_alignment_target",
+    dest="detach_alignment_target",
+    action="store_true",
+    help="detach real target features when computing alignment loss",
+)
+parser.add_argument(
+    "--no_detach_alignment_target",
+    dest="detach_alignment_target",
+    action="store_false",
+    help="do not detach real target features for alignment loss",
+)
+parser.set_defaults(detach_alignment_target=True)
 args = parser.parse_args()
 
 
