@@ -38,7 +38,7 @@ parser.add_argument(
     "--eval_modalities",
     type=str,
     default=None,
-    help="comma-separated eval-only modality cases: a,t,v,at,av,tv",
+    help="comma-separated eval-only modality cases: a,t,v,at,av,tv,atv (or full/all)",
 )
 parser.add_argument(
     "--dataset",

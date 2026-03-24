@@ -15,6 +15,9 @@ EVAL_MODALITY_TO_MISSING_MODE = {
     "v": 3,
     "a": 4,
     "t": 5,
+    "atv": 6,
+    "full": 6,
+    "all": 6,
 }
 
 
