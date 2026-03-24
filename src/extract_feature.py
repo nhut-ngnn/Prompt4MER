@@ -40,6 +40,8 @@ DATASET_ALIASES = {
     "SIMS": "sims",
     "ch-sims": "sims",
     "CH-SIMS": "sims",
+    "meld": "meld",
+    "MELD": "meld",
 }
 
 
@@ -133,6 +135,31 @@ def _infer_iemocap_dialog_video_from_audio(audio_path, sample_id=None):
         for ext in VIDEO_EXTENSIONS:
             candidates.append(os.path.join(root, f"{dialog_id}{ext}"))
         candidates.append(os.path.join(root, dialog_id))
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _infer_meld_video_from_sample(video_base, sample_id=None, audio_path=None):
+    if not video_base:
+        return None
+
+    stems = []
+    if sample_id:
+        stems.append(str(sample_id))
+    if audio_path:
+        stems.append(os.path.splitext(os.path.basename(str(audio_path)))[0])
+    stems = list(dict.fromkeys(stems))
+
+    split_tokens = ["train", "dev", "val", "test"]
+    candidates = []
+    for stem in stems:
+        for ext in VIDEO_EXTENSIONS:
+            candidates.append(os.path.join(video_base, f"{stem}{ext}"))
+            for split_name in split_tokens:
+                candidates.append(os.path.join(video_base, split_name, f"{stem}{ext}"))
 
     for candidate in candidates:
         if os.path.exists(candidate):
@@ -444,6 +471,7 @@ def process_dataset(
     pkl_path,
     wav_base,
     video_base,
+    dataset_key,
     output_path,
     pseudo=False,
     skip_text=False,
@@ -478,9 +506,15 @@ def process_dataset(
 
         audio_path = _resolve_path(audio_ref, base_dir=wav_base)
         video_path = _resolve_path(video_ref, base_dir=video_base)
+        if video_path is None and dataset_key == "meld":
+            video_path = _infer_meld_video_from_sample(
+                video_base=video_base,
+                sample_id=sample_id,
+                audio_path=audio_path,
+            )
         if video_path is None:
             video_path = _infer_video_from_audio_path(audio_path)
-        if video_path is None:
+        if video_path is None and dataset_key == "iemocap":
             video_path = _infer_iemocap_dialog_video_from_audio(audio_path, sample_id=sample_id)
         if video_path is not None and (video_start is None or video_end is None):
             # Only dialog videos need time segmenting. Utterance-level clips keep full range.
@@ -580,6 +614,11 @@ def main():
             "output_prefix": "CH_SIMS_BERT_WavLM_CLIP",
             "skip_text": False,
         },
+        "meld": {
+            "preprocessed_dir": "MELD_preprocessed",
+            "output_prefix": "MELD_BERT_WavLM_CLIP",
+            "skip_text": False,
+        },
     }
 
     cfg = dataset_cfg[dataset_key]
@@ -598,6 +637,7 @@ def main():
             pkl_path=pkl_file,
             wav_base=args.wav_base,
             video_base=args.video_base,
+            dataset_key=dataset_key,
             output_path=output_file,
             pseudo=args.pseudo and split_name == "train",
             skip_text=skip_text,

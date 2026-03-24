@@ -67,6 +67,18 @@ def eval_iemocap(results, truths):
     print("  - Accuracy: ", acc)
 
 
+def eval_meld(results, truths):
+    test_preds = results.view(-1, 7).cpu().detach().numpy()
+    test_truth = truths.view(-1).cpu().detach().numpy()
+
+    test_preds_i = np.argmax(test_preds, axis=1)
+    test_truth_i = test_truth
+    f1 = f1_score(test_truth_i, test_preds_i, average='weighted')
+    acc = accuracy_score(test_truth_i, test_preds_i)
+    print("  - F1 Score: ", f1)
+    print("  - Accuracy: ", acc)
+
+
 def eval_sims(results, truths, exclude_zero=False):
     test_preds = results.view(-1).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
@@ -89,6 +101,5 @@ def eval_sims(results, truths, exclude_zero=False):
     print("mult_acc_5: ", mult_a5)
     print("F1 score: ", f_score)
     print("Accuracy: ", acc2)
-
 
 

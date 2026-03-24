@@ -55,6 +55,10 @@ class WavLMEmbeddingModel(nn.Module):
         return pooled_output, projected
 
 
+# Backward-compatible alias for legacy imports.
+Wav2Vec2EmbeddingModel = WavLMEmbeddingModel
+
+
 class CLIPVideoEmbeddingModel(nn.Module):
     def __init__(self, embedding_dim=768, projection_dim=512):
         super().__init__()

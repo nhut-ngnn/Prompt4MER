@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from src import model as mm
-from src.eval_metrics import eval_iemocap, eval_mosei_senti, eval_mosi, eval_sims
+from src.eval_metrics import eval_iemocap, eval_meld, eval_mosei_senti, eval_mosi, eval_sims
 
 
 EVAL_MODALITY_TO_MISSING_MODE = {
@@ -233,6 +233,7 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
     supports_prompt_missing = hasattr(base_model, "get_complete_data") and hasattr(
         base_model, "missing_type_prompt"
     )
+    is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
 
     loader = test_loader if test else valid_loader
     total_loss = 0.0
@@ -252,7 +253,7 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
                         vision.cuda(),
                         eval_attr.cuda(),
                     )
-                    if hyp_params.dataset == "iemocap":
+                    if is_classification_dataset:
                         eval_attr = eval_attr.long()
 
             if not supports_prompt_missing:
@@ -263,8 +264,8 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
             batch_size = text.size(0)
             net = nn.DataParallel(model) if batch_size > 10 else model
             preds = net(text, audio, vision, missing_mod)
-            if hyp_params.dataset == "iemocap":
-                preds = preds.view(-1, 4)
+            if is_classification_dataset:
+                preds = preds.view(-1, hyp_params.output_dim)
                 eval_attr = eval_attr.view(-1)
 
             total_loss += criterion(preds, eval_attr).item() * batch_size
@@ -284,6 +285,8 @@ def print_metrics(hyp_params, results, truths):
         eval_mosi(results, truths, True)
     elif hyp_params.dataset == "iemocap":
         eval_iemocap(results, truths)
+    elif hyp_params.dataset == "meld":
+        eval_meld(results, truths)
     elif hyp_params.dataset == "sims":
         eval_sims(results, truths)
 

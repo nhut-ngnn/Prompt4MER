@@ -151,6 +151,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
     def train_epoch(model, optimizer, criterion, epoch):
         model.train()
         num_batches = hyp_params.n_train // hyp_params.batch_size
+        is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
         proc_total_loss, proc_task_loss, proc_size = 0, 0, 0
         proc_gen_mse, proc_gen_cos, proc_gen_total = 0, 0, 0
         use_alignment_loss = (
@@ -174,7 +175,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                         vision.cuda(),
                         eval_attr.cuda(),
                     )
-                    if hyp_params.dataset == "iemocap":
+                    if is_classification_dataset:
                         eval_attr = eval_attr.long()
 
             batch_size = text.size(0)
@@ -186,8 +187,8 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
             else:
                 preds = net(text, audio, vision, missing_mod)
 
-            if hyp_params.dataset == "iemocap":
-                preds = preds.view(-1, 4)
+            if is_classification_dataset:
+                preds = preds.view(-1, hyp_params.output_dim)
                 eval_attr = eval_attr.view(-1)
             task_loss = criterion(preds, eval_attr)
 

@@ -1,4 +1,5 @@
 import argparse
+import csv
 import glob
 import json
 import logging
@@ -28,6 +29,7 @@ LABEL_MAP_4 = {
 }
 
 VIDEO_FILE_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".flv")
+AUDIO_FILE_EXTS = (".wav", ".flac", ".mp3", ".m4a")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -40,6 +42,17 @@ def _first_non_empty(*values):
             continue
         return value
     return None
+
+
+def _item_get(item, *keys):
+    if not isinstance(item, dict):
+        return None
+    lowered = {str(key).lower(): value for key, value in item.items()}
+    values = []
+    for key in keys:
+        values.append(item.get(key))
+        values.append(lowered.get(str(key).lower()))
+    return _first_non_empty(*values)
 
 
 def _first_existing_path(candidates):
@@ -146,6 +159,25 @@ def _infer_iemocap_dialog_video_path(data_root, sess_id, dialog_id, video_root=N
             candidates.append(os.path.join(root, f"{dialog_id}{ext}"))
         candidates.append(os.path.join(root, dialog_id))
 
+    return _first_existing_path(candidates)
+
+
+def _infer_meld_media_path(root, stem, split_name=None, exts=VIDEO_FILE_EXTS):
+    if not root or not stem:
+        return None
+
+    split_aliases = []
+    if split_name is not None:
+        split_aliases.append(split_name)
+        if split_name == "val":
+            split_aliases.append("dev")
+
+    candidates = []
+    for ext in exts:
+        candidates.append(os.path.join(root, f"{stem}{ext}"))
+    for split_token in split_aliases:
+        for ext in exts:
+            candidates.append(os.path.join(root, split_token, f"{stem}{ext}"))
     return _first_existing_path(candidates)
 
 
@@ -376,7 +408,35 @@ def preprocess_iemocap(args):
 
 
 def _load_metadata_records(metadata_path):
+    if os.path.isdir(metadata_path):
+        records = []
+        patterns = ["*.csv", "*.jsonl", "*.json", "*.pkl", "*.pickle"]
+        all_files = []
+        for pattern in patterns:
+            all_files.extend(glob.glob(os.path.join(metadata_path, pattern)))
+        for file_path in sorted(set(all_files)):
+            inferred_split = _normalize_split_name(os.path.basename(file_path))
+            file_records = _load_metadata_records(file_path)
+            for item in file_records:
+                if not isinstance(item, dict):
+                    records.append(item)
+                    continue
+                row = dict(item)
+                split_name = _normalize_split_name(_item_get(row, "split"))
+                if split_name is None and inferred_split is not None:
+                    row["split"] = inferred_split
+                records.append(row)
+        return records
+
     ext = os.path.splitext(metadata_path)[1].lower()
+
+    if ext == ".csv":
+        records = []
+        with open(metadata_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                records.append(dict(row))
+        return records
 
     if ext == ".jsonl":
         records = []
@@ -424,7 +484,7 @@ def _load_metadata_records(metadata_path):
             return records
         raise ValueError("Unsupported pickle schema. Expected list or split->list dict.")
 
-    raise ValueError("Unsupported metadata extension. Use .jsonl, .json, or .pkl")
+    raise ValueError("Unsupported metadata extension. Use .csv, .jsonl, .json, or .pkl")
 
 
 def _preprocess_from_metadata(args, dataset_name, output_subdir):
@@ -442,39 +502,62 @@ def _preprocess_from_metadata(args, dataset_name, output_subdir):
             logging.warning("Skipped metadata record %d because it is not a dict", idx)
             continue
 
-        split_name = _normalize_split_name(item.get("split"))
+        split_name = _normalize_split_name(_item_get(item, "split"))
+        if split_name is None:
+            split_name = _normalize_split_name(os.path.basename(args.metadata_path))
         if split_name is None:
             logging.warning("Skipped metadata record %d because split is missing/invalid", idx)
             continue
 
-        sample_id = _first_non_empty(item.get("sample_id"), item.get("id"), item.get("utt_id"), f"{dataset_name}_{idx}")
+        sample_id = _first_non_empty(
+            _item_get(item, "sample_id", "id", "utt_id", "utterance_id"),
+            f"{dataset_name}_{idx}",
+        )
 
         audio_path = _first_non_empty(
-            item.get("audio_path"),
-            item.get("wav_path"),
-            item.get("path"),
-            item.get("filename"),
+            _item_get(item, "audio_path", "wav_path", "path", "filename", "audio", "wav"),
         )
-        if audio_path is None:
-            logging.warning("Skipped metadata record %d because audio path is missing", idx)
-            continue
 
         video_path = _first_non_empty(
-            item.get("video_path"),
-            item.get("video_frame_dir"),
-            item.get("frame_dir"),
-            item.get("video"),
+            _item_get(item, "video_path", "video_frame_dir", "frame_dir", "video", "video_file"),
         )
-        text = _first_non_empty(item.get("text"), item.get("transcript"), item.get("utterance"), "")
+        text = _first_non_empty(
+            _item_get(item, "text", "transcript", "utterance", "Utterance"),
+            "",
+        )
         label = _first_non_empty(
-            item.get("emotion"),
-            item.get("label"),
-            item.get("sentiment"),
-            item.get("regression_label"),
+            _item_get(item, "emotion", "label", "sentiment", "regression_label", "Emotion"),
         )
 
         audio_path = _resolve_path(audio_path, base_root=args.audio_root)
         video_path = _resolve_path(video_path, base_root=args.video_root)
+
+        if dataset_name == "MELD":
+            dialog_id = _item_get(item, "dialogue_id", "dialog_id", "Dialogue_ID")
+            utterance_id = _item_get(item, "utterance_id", "utt_id", "Utterance_ID")
+            if dialog_id is not None and utterance_id is not None:
+                meld_stem = f"dia{dialog_id}_utt{utterance_id}"
+                if audio_path is None:
+                    audio_path = _infer_meld_media_path(
+                        args.audio_root,
+                        meld_stem,
+                        split_name=split_name,
+                        exts=AUDIO_FILE_EXTS,
+                    )
+                if video_path is None:
+                    video_path = _infer_meld_media_path(
+                        args.video_root,
+                        meld_stem,
+                        split_name=split_name,
+                        exts=VIDEO_FILE_EXTS,
+                    )
+                if sample_id == f"{dataset_name}_{idx}":
+                    sample_id = meld_stem
+
+        if audio_path is None:
+            logging.warning("Skipped metadata record %d because audio path is missing", idx)
+            continue
+
         if video_path is None:
             video_path = _infer_video_from_audio_path(audio_path)
 
@@ -520,12 +603,16 @@ def preprocess_sims(args):
     _preprocess_from_metadata(args, dataset_name="CH-SIMS", output_subdir="SIMS_preprocessed")
 
 
+def preprocess_meld(args):
+    _preprocess_from_metadata(args, dataset_name="MELD", output_subdir="MELD_preprocessed")
+
+
 def arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["iemocap", "mosi", "sims"],
+        choices=["iemocap", "mosi", "sims", "meld"],
         required=True,
     )
     parser.add_argument(
@@ -538,7 +625,7 @@ def arg_parser():
         "--metadata_path",
         type=str,
         default=None,
-        help="Path to metadata file (.jsonl/.json/.pkl) for MOSI/SIMS preprocessing",
+        help="Path to metadata file or directory (.csv/.jsonl/.json/.pkl) for MOSI/SIMS/MELD preprocessing",
     )
     parser.add_argument(
         "--audio_root",
@@ -571,3 +658,5 @@ if __name__ == "__main__":
         preprocess_mosi(args)
     elif args.dataset == "sims":
         preprocess_sims(args)
+    elif args.dataset == "meld":
+        preprocess_meld(args)

@@ -44,7 +44,7 @@ parser.add_argument(
     "--dataset",
     type=str,
     default="mosi",
-    help="dataset to use (mosei, mosi, iemocap, sims)",
+    help="dataset to use (mosei, mosi, iemocap, meld, sims)",
 )
 parser.add_argument(
     "--data_path",
@@ -180,9 +180,9 @@ args = parser.parse_args()
 dataset = str.lower(args.dataset.strip())
 args.dataset = dataset
 
-output_dim_dict = {"mosi": 1, "mosei": 1, "sims": 1, "iemocap": 4}
+output_dim_dict = {"mosi": 1, "mosei": 1, "sims": 1, "iemocap": 4, "meld": 7}
 
-criterion_dict = {"iemocap": "CrossEntropyLoss"}
+criterion_dict = {"iemocap": "CrossEntropyLoss", "meld": "CrossEntropyLoss"}
 
 
 def setup_seed(seed):
