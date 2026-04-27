@@ -97,28 +97,37 @@ def transfer_model(new_model, pretrained):
     else:
         pretrain_dict = loaded.state_dict()
 
+    skip_keys = {
+        "proj_l.weight",
+        "proj_a.weight",
+        "proj_v.weight",
+        "out_layer.weight",
+        "out_layer.bias",
+        "classifer.weight",
+        "classifer.bias",
+    }
+
     new_dict = new_model.state_dict()
-    state_dict = {}
+    transferred = {}
     for k, v in pretrain_dict.items():
-        if k in new_dict.keys() and k not in [
-            "proj_l.weight",
-            "proj_a.weight",
-            "proj_v.weight",
-            "out_layer.weight",
-            "out_layer.bias",
-        ]:
-            state_dict[k] = v
-        else:
+        if k not in new_dict:
             print("Missing key(s) in state_dict :{}".format(k))
-    new_dict.update(state_dict)
+            continue
+        if k in skip_keys:
+            print("Skipped pretrained key :{}".format(k))
+            continue
+        if new_dict[k].shape != v.shape:
+            print(
+                "Skipped pretrained key due to shape mismatch :{} {} -> {}".format(
+                    k, tuple(v.shape), tuple(new_dict[k].shape)
+                )
+            )
+            continue
+        transferred[k] = v
+
+    new_dict.update(transferred)
     new_model.load_state_dict(new_dict)
     for name, param in new_model.named_parameters():
-        if name in pretrain_dict.keys() and name not in [
-            "proj_l.weight",
-            "proj_a.weight",
-            "proj_v.weight",
-            "out_layer.weight",
-            "out_layer.bias",
-        ]:
+        if name in transferred:
             param.requires_grad = False
     return new_model

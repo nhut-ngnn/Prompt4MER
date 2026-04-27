@@ -25,104 +25,54 @@ def _supports_feature_alignment(model):
     )
 
 
-def _get_lambda_gen(epoch, hyp_params):
-    base_lambda = float(getattr(hyp_params, "lambda_gen", 0.0))
-    warmup_epochs = int(getattr(hyp_params, "lambda_gen_warmup_epochs", 0))
-    if warmup_epochs <= 0:
-        return base_lambda
-    warmup_scale = min(1.0, float(epoch) / float(warmup_epochs))
-    return base_lambda * warmup_scale
+def _cosine_alignment_loss(generated: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
+    generated = generated.reshape(1, -1)
+    real = real.reshape(1, -1)
+    return 1.0 - F.cosine_similarity(generated, real, dim=1).mean()
 
 
-def _compute_feature_alignment_loss(aux_outputs, missing_mod, hyp_params):
-    generated = aux_outputs.get("generated_features")
+def _compute_feature_alignment_loss(aux_outputs, missing_mod):
+    generated = aux_outputs.get("raw_generated_features")
     real = aux_outputs.get("real_features")
     if generated is None or real is None:
         zero = aux_outputs["logits"].new_tensor(0.0)
-        return {
-            "mse_loss": zero,
-            "cos_loss": zero,
-            "gen_loss": zero,
-            "num_active_modalities": 0,
-        }
+        return zero
 
     ref_tensor = generated["text"]
     missing_mod = missing_mod.to(ref_tensor.device).long().view(-1)
 
-    missing_masks = {
-        "text": (missing_mod == 0) | (missing_mod == 3) | (missing_mod == 4),
-        "audio": (missing_mod == 1) | (missing_mod == 3) | (missing_mod == 5),
-        "vision": (missing_mod == 2) | (missing_mod == 4) | (missing_mod == 5),
-    }
+    total_loss = ref_tensor.new_tensor(0.0)
+    count = 0
+    for i, mode in enumerate(missing_mod.tolist()):
+        if mode in [0, 3, 4]:
+            total_loss = total_loss + _cosine_alignment_loss(
+                generated["text"][i], real["text"][i]
+            )
+            count += 1
+        if mode in [1, 3, 5]:
+            total_loss = total_loss + _cosine_alignment_loss(
+                generated["audio"][i], real["audio"][i]
+            )
+            count += 1
+        if mode in [2, 4, 5]:
+            total_loss = total_loss + _cosine_alignment_loss(
+                generated["vision"][i], real["vision"][i]
+            )
+            count += 1
 
-    mse_terms, cos_terms, total_terms = [], [], []
-    reduction = getattr(hyp_params, "gen_loss_reduction", "mean")
-    for modality, mask in missing_masks.items():
-        if not torch.any(mask):
-            continue
-
-        mask_count = int(mask.sum().item())
-        gen_feat = generated[modality][mask].reshape(mask_count, -1)
-        real_feat = real[modality][mask]
-        if getattr(hyp_params, "detach_alignment_target", False):
-            real_feat = real_feat.detach()
-        real_feat = real_feat.reshape(mask_count, -1)
-
-        mse_loss = F.mse_loss(gen_feat, real_feat, reduction=reduction)
-        cos_vec = 1.0 - F.cosine_similarity(gen_feat, real_feat, dim=-1)
-        cos_loss = cos_vec.mean() if reduction == "mean" else cos_vec.sum()
-        total_loss = (
-            float(getattr(hyp_params, "alpha_mse", 1.0)) * mse_loss
-            + float(getattr(hyp_params, "beta_cos", 1.0)) * cos_loss
-        )
-        mse_terms.append(mse_loss)
-        cos_terms.append(cos_loss)
-        total_terms.append(total_loss)
-
-    if not total_terms:
-        zero = ref_tensor.new_tensor(0.0)
-        return {
-            "mse_loss": zero,
-            "cos_loss": zero,
-            "gen_loss": zero,
-            "num_active_modalities": 0,
-        }
-
-    if reduction == "mean":
-        mse_loss = torch.stack(mse_terms).mean()
-        cos_loss = torch.stack(cos_terms).mean()
-        gen_loss = torch.stack(total_terms).mean()
-    else:
-        mse_loss = torch.stack(mse_terms).sum()
-        cos_loss = torch.stack(cos_terms).sum()
-        gen_loss = torch.stack(total_terms).sum()
-
-    return {
-        "mse_loss": mse_loss,
-        "cos_loss": cos_loss,
-        "gen_loss": gen_loss,
-        "num_active_modalities": len(total_terms),
-    }
-
+    if count == 0:
+        return ref_tensor.new_tensor(0.0)
+    return total_loss / float(count)
 
 def initiate(hyp_params, train_loader, valid_loader, test_loader):
     if hyp_params.eval_only:
         return evaluate_only(hyp_params, valid_loader, test_loader)
 
-    if (
-        getattr(hyp_params, "enable_feature_alignment_loss", False)
-        and getattr(hyp_params, "pretrained_model", None) is None
-    ):
-        print(
-            "Feature-alignment loss is enabled, but no pretrained backbone is provided. "
-            "Running backbone training without auxiliary alignment loss."
-        )
-
     if hyp_params.pretrained_model is not None:
-        model = getattr(mm, "PromptModel")(hyp_params)
+        model = mm.Prompt4MSER(hyp_params)
         model = transfer_model(model, hyp_params.pretrained_model)
     else:
-        model = getattr(mm, "MULTModel")(hyp_params)
+        model = mm.Prompt4MSER(hyp_params)
 
     if hyp_params.use_cuda:
         model = model.cuda()
@@ -131,7 +81,7 @@ def initiate(hyp_params, train_loader, valid_loader, test_loader):
     criterion = getattr(nn, hyp_params.criterion)()
 
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", patience=hyp_params.when, factor=0.1, verbose=True
+        optimizer, mode="min", patience=hyp_params.when, factor=0.1
     )
     settings = {
         "model": model,
@@ -152,14 +102,14 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
         model.train()
         num_batches = hyp_params.n_train // hyp_params.batch_size
         is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
-        proc_total_loss, proc_task_loss, proc_size = 0, 0, 0
-        proc_gen_mse, proc_gen_cos, proc_gen_total = 0, 0, 0
+        proc_total_loss, proc_task_loss, proc_align_loss, proc_size = 0, 0, 0, 0
         use_alignment_loss = (
             bool(getattr(hyp_params, "enable_feature_alignment_loss", False))
-            and getattr(hyp_params, "pretrained_model", None) is not None
             and _supports_feature_alignment(model)
         )
-        lambda_gen = _get_lambda_gen(epoch, hyp_params) if use_alignment_loss else 0.0
+        lambda_align = (
+            float(getattr(hyp_params, "lambda_align", 0.1)) if use_alignment_loss else 0.0
+        )
         start_time = time.time()
 
         for i_batch, (batch_X, batch_Y, missing_mod) in enumerate(train_loader):
@@ -180,7 +130,6 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
             batch_size = text.size(0)
             net = nn.DataParallel(model) if batch_size > 10 else model
-            aux_outputs = None
             if use_alignment_loss:
                 aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
                 preds = aux_outputs["logits"]
@@ -191,20 +140,11 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                 preds = preds.view(-1, hyp_params.output_dim)
                 eval_attr = eval_attr.view(-1)
             task_loss = criterion(preds, eval_attr)
-
             if use_alignment_loss:
-                align_loss_terms = _compute_feature_alignment_loss(
-                    aux_outputs, missing_mod, hyp_params
-                )
-                gen_mse_loss = align_loss_terms["mse_loss"]
-                gen_cos_loss = align_loss_terms["cos_loss"]
-                gen_total_loss = align_loss_terms["gen_loss"]
-                total_loss = task_loss + lambda_gen * gen_total_loss
+                align_loss = _compute_feature_alignment_loss(aux_outputs, missing_mod)
+                total_loss = task_loss + lambda_align * align_loss
             else:
-                zero = task_loss.new_tensor(0.0)
-                gen_mse_loss = zero
-                gen_cos_loss = zero
-                gen_total_loss = zero
+                align_loss = task_loss.new_tensor(0.0)
                 total_loss = task_loss
 
             total_loss.backward()
@@ -213,32 +153,26 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
             proc_total_loss += total_loss.item() * batch_size
             proc_task_loss += task_loss.item() * batch_size
-            proc_gen_mse += gen_mse_loss.item() * batch_size
-            proc_gen_cos += gen_cos_loss.item() * batch_size
-            proc_gen_total += gen_total_loss.item() * batch_size
+            proc_align_loss += align_loss.item() * batch_size
             proc_size += batch_size
 
             if i_batch % hyp_params.log_interval == 0 and i_batch > 0:
                 avg_total_loss = proc_total_loss / proc_size
                 avg_task_loss = proc_task_loss / proc_size
+                avg_align_loss = proc_align_loss / proc_size
                 elapsed_time = time.time() - start_time
                 if use_alignment_loss:
-                    avg_gen_mse = proc_gen_mse / proc_size
-                    avg_gen_cos = proc_gen_cos / proc_size
-                    avg_gen_total = proc_gen_total / proc_size
                     print(
                         "Epoch {:2d} | Batch {:3d}/{:3d} | Time/Batch(ms) {:5.2f} | "
-                        "Task Loss {:5.4f} | Gen MSE {:5.4f} | Gen Cos {:5.4f} | "
-                        "Gen Total {:5.4f} | lambda_gen {:5.4f} | Total Loss {:5.4f}".format(
+                        "Task Loss {:5.4f} | Align Loss {:5.4f} | "
+                        "lambda_align {:5.4f} | Total Loss {:5.4f}".format(
                             epoch,
                             i_batch,
                             num_batches,
                             elapsed_time * 1000 / hyp_params.log_interval,
                             avg_task_loss,
-                            avg_gen_mse,
-                            avg_gen_cos,
-                            avg_gen_total,
-                            lambda_gen,
+                            avg_align_loss,
+                            lambda_align,
                             avg_total_loss,
                         )
                     )
@@ -252,8 +186,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                             avg_total_loss,
                         )
                     )
-                proc_total_loss, proc_task_loss, proc_size = 0, 0, 0
-                proc_gen_mse, proc_gen_cos, proc_gen_total = 0, 0, 0
+                proc_total_loss, proc_task_loss, proc_align_loss, proc_size = 0, 0, 0, 0
                 start_time = time.time()
 
     best_valid = 1e8

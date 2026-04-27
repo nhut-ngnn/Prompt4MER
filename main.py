@@ -90,6 +90,26 @@ parser.add_argument(
 )
 parser.add_argument("--prompt_dim", type=int, default=30)
 parser.add_argument("--prompt_length", type=int, default=16)
+parser.add_argument(
+    "--fusion_head_output_type",
+    type=str,
+    default="mean",
+    choices=["cls", "mean", "max", "concat"],
+    help="readout strategy for 4M-SER fusion head",
+)
+parser.add_argument(
+    "--audio_norm_type",
+    type=str,
+    default="none",
+    choices=["none", "layer_norm", "min_max"],
+    help="audio feature normalization in 4M-SER",
+)
+parser.add_argument(
+    "--linear_layer_output",
+    type=str,
+    default="",
+    help="comma-separated hidden dimensions for 4M-SER classifier head, e.g. 256,128",
+)
 
 
 # Tuning
@@ -117,7 +137,7 @@ parser.add_argument("--name", type=str, default=None, help="name of the trial")
 parser.add_argument(
     "--print_prompt_sample",
     action="store_true",
-    help="print one sample after prompt generation (PromptModel only)",
+    help="print one sample after prompt generation",
 )
 parser.add_argument(
     "--prompt_sample_out",
@@ -128,52 +148,14 @@ parser.add_argument(
 parser.add_argument(
     "--enable_feature_alignment_loss",
     action="store_true",
-    help="enable auxiliary feature-alignment loss for PromptModel stage-2 training",
+    help="enable auxiliary cosine-based feature-alignment loss",
 )
 parser.add_argument(
-    "--lambda_gen",
+    "--lambda_align",
     type=float,
     default=0.1,
-    help="weight for auxiliary feature-alignment loss",
+    help="weight for auxiliary cosine-based feature-alignment loss",
 )
-parser.add_argument(
-    "--alpha_mse",
-    type=float,
-    default=1.0,
-    help="weight for MSE term in feature-alignment loss",
-)
-parser.add_argument(
-    "--beta_cos",
-    type=float,
-    default=1.0,
-    help="weight for cosine term in feature-alignment loss",
-)
-parser.add_argument(
-    "--gen_loss_reduction",
-    type=str,
-    default="mean",
-    choices=["mean", "sum"],
-    help="reduction mode for auxiliary feature-alignment loss",
-)
-parser.add_argument(
-    "--lambda_gen_warmup_epochs",
-    type=int,
-    default=0,
-    help="optional warm-up epochs for lambda_gen (0 disables warm-up)",
-)
-parser.add_argument(
-    "--detach_alignment_target",
-    dest="detach_alignment_target",
-    action="store_true",
-    help="detach real target features when computing alignment loss",
-)
-parser.add_argument(
-    "--no_detach_alignment_target",
-    dest="detach_alignment_target",
-    action="store_false",
-    help="do not detach real target features for alignment loss",
-)
-parser.set_defaults(detach_alignment_target=True)
 args = parser.parse_args()
 
 

@@ -148,12 +148,13 @@ def _normalize_state_dict_keys(state_dict):
 
 def _build_model_from_state_dict(state_dict, hyp_params):
     state_keys = state_dict.keys()
-    is_prompt_model = any(
+    has_prompt_weights = any(
         key.startswith("generative_prompt") or key.startswith("missing_type_prompt")
         for key in state_keys
     )
-    model_cls = getattr(mm, "PromptModel" if is_prompt_model else "MULTModel")
-    model = model_cls(hyp_params)
+    if not has_prompt_weights:
+        print("Checkpoint does not expose prompt weights; instantiating Prompt4MSER anyway.")
+    model = mm.Prompt4MSER(hyp_params)
     overlap = set(model.state_dict().keys()) & set(state_keys)
     if not overlap:
         raise ValueError(
@@ -170,7 +171,12 @@ def _build_model_from_state_dict(state_dict, hyp_params):
 
 def load_model(checkpoint_path, hyp_params):
     device = torch.device("cuda" if hyp_params.use_cuda else "cpu")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    try:
+        checkpoint = torch.load(
+            checkpoint_path, map_location=device, weights_only=False
+        )
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
     checkpoint = _extract_state_dict(checkpoint)
     checkpoint = _normalize_state_dict_keys(checkpoint)
 
@@ -256,10 +262,11 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
                     if is_classification_dataset:
                         eval_attr = eval_attr.long()
 
-            if not supports_prompt_missing:
-                text, audio, vision = mask_modalities_by_missing_mode(
-                    text, audio, vision, missing_mod
-                )
+            # For missing-modality evaluation, always mask the raw inputs so the
+            # model cannot access held-out modalities through the original tensors.
+            text, audio, vision = mask_modalities_by_missing_mode(
+                text, audio, vision, missing_mod
+            )
 
             batch_size = text.size(0)
             net = nn.DataParallel(model) if batch_size > 10 else model
@@ -312,10 +319,7 @@ def evaluate_only(hyp_params, valid_loader, test_loader):
         print("Eval-only uses complete samples (fixed_missing_mode=6); --drop_rate is ignored.")
 
     if requested_modalities is not None and not supports_prompt_missing:
-        print(
-            "Checkpoint is MULTModel (no prompt missing handler). "
-            "Applying input masking by missing mode during evaluation."
-        )
+        print("Checkpoint does not expose prompt-missing handlers. Applying input masking.")
 
     if requested_modalities is None:
         try:
