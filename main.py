@@ -1,4 +1,5 @@
 import random
+import os
 
 import numpy as np
 import torch
@@ -132,7 +133,10 @@ parser.add_argument(
     help="frequency of result logging (default: 30)",
 )
 parser.add_argument("--seed", type=int, default=666, help="random seed")
+parser.add_argument("--num_seeds", type=int, default=1, help="number of seeds to run")
+parser.add_argument("--seed_stride", type=int, default=1, help="increment between seeds")
 parser.add_argument("--no_cuda", action="store_true", help="do not use cuda")
+parser.add_argument("--gpu_id", type=int, default=0, help="CUDA device index to use")
 parser.add_argument("--name", type=str, default=None, help="name of the trial")
 parser.add_argument(
     "--print_prompt_sample",
@@ -148,13 +152,13 @@ parser.add_argument(
 parser.add_argument(
     "--enable_feature_alignment_loss",
     action="store_true",
-    help="enable auxiliary cosine-based feature-alignment loss",
+    help="enable cosine-similarity alignment loss on generated features",
 )
 parser.add_argument(
     "--lambda_align",
     type=float,
     default=0.1,
-    help="weight for auxiliary cosine-based feature-alignment loss",
+    help="weight for cosine-similarity alignment loss",
 )
 args = parser.parse_args()
 
@@ -169,14 +173,14 @@ criterion_dict = {"iemocap": "CrossEntropyLoss", "meld": "CrossEntropyLoss"}
 
 def setup_seed(seed):
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
 
-
-torch.set_default_tensor_type("torch.FloatTensor")
 use_cuda = False
+device = torch.device("cpu")
 if torch.cuda.is_available():
     if args.no_cuda:
         print(
@@ -184,10 +188,11 @@ if torch.cuda.is_available():
         )
     else:
         torch.cuda.manual_seed(args.seed)
-        torch.set_default_tensor_type("torch.cuda.FloatTensor")
         use_cuda = True
+        device = torch.device(f"cuda:{args.gpu_id}")
 
 setup_seed(args.seed)
+print(f"Using device: {device}")
 
 ####################################################################
 #
@@ -208,6 +213,7 @@ hyp_params = args
 hyp_params.orig_d_l, hyp_params.orig_d_a, hyp_params.orig_d_v = orig_dims
 hyp_params.layers = args.nlevels
 hyp_params.use_cuda = use_cuda
+hyp_params.device = device
 hyp_params.dataset = dataset
 hyp_params.when = args.when
 hyp_params.n_train, hyp_params.n_valid, hyp_params.n_test = n_nums
@@ -216,5 +222,66 @@ hyp_params.criterion = criterion_dict.get(dataset, "L1Loss")
 hyp_params.seq_len = seq_len
 
 
+def _seed_run_name(base_name, seed):
+    if base_name is None:
+        return None
+    root, ext = os.path.splitext(base_name)
+    if ext:
+        return f"{root}.seed{seed}{ext}"
+    return f"{base_name}.seed{seed}"
+
+
+def _collect_scalar_metrics(run_summaries):
+    if not run_summaries:
+        return {}
+
+    aggregated = {}
+    metric_groups = {
+        "valid_loss": [summary["valid_loss"] for summary in run_summaries],
+        "test_loss": [summary["test_loss"] for summary in run_summaries],
+    }
+    for split in ["valid_metrics", "test_metrics"]:
+        keys = run_summaries[0][split].keys()
+        for key in keys:
+            metric_groups[f"{split}.{key}"] = [summary[split][key] for summary in run_summaries]
+
+    for key, values in metric_groups.items():
+        arr = np.asarray(values, dtype=np.float64)
+        aggregated[key] = {
+            "mean": float(arr.mean()),
+            "std": float(arr.std(ddof=0)),
+            "values": [float(v) for v in arr.tolist()],
+        }
+    return aggregated
+
+
 if __name__ == "__main__":
-    train.initiate(hyp_params, trainloder, validloder, testloder)
+    seeds = [args.seed + i * args.seed_stride for i in range(args.num_seeds)]
+
+    if args.eval_only or args.num_seeds == 1:
+        run_name = _seed_run_name(args.name, seeds[0]) if args.num_seeds > 1 else args.name
+        hyp_params.seed = seeds[0]
+        hyp_params.name = run_name
+        setup_seed(hyp_params.seed)
+        train.initiate(hyp_params, trainloder, validloder, testloder)
+    else:
+        run_summaries = []
+        base_name = args.name
+        for run_idx, seed in enumerate(seeds, start=1):
+            print("=" * 60)
+            print(f"Seed run {run_idx}/{len(seeds)} | seed={seed}")
+            print("=" * 60)
+            setup_seed(seed)
+            hyp_params.seed = seed
+            hyp_params.name = _seed_run_name(base_name, seed)
+            summary = train.initiate(hyp_params, trainloder, validloder, testloder)
+            run_summaries.append(summary)
+
+        aggregated = _collect_scalar_metrics(run_summaries)
+        print("=" * 60)
+        print(f"Aggregate over {len(seeds)} seeds")
+        print("=" * 60)
+        for key, stats in aggregated.items():
+            print(
+                f"{key}: mean={stats['mean']:.6f} std={stats['std']:.6f} values={stats['values']}"
+            )

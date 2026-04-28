@@ -25,6 +25,16 @@ def weighted_accuracy(test_preds_emo, test_truth_emo):
 
 
 def eval_mosei_senti(results, truths, exclude_zero=False):
+    metrics = get_mosei_metrics(results, truths, exclude_zero)
+    print("MAE: ", metrics["mae"])
+    print("Correlation Coefficient: ", metrics["corr"])
+    print("mult_acc_7: ", metrics["mult_acc_7"])
+    print("mult_acc_5: ", metrics["mult_acc_5"])
+    print("F1 score: ", metrics["f1"])
+    print("Accuracy: ", metrics["acc"])
+
+
+def get_mosei_metrics(results, truths, exclude_zero=False):
     test_preds = results.view(-1).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
 
@@ -43,12 +53,14 @@ def eval_mosei_senti(results, truths, exclude_zero=False):
     binary_truth = (test_truth[non_zeros] > 0)
     binary_preds = (test_preds[non_zeros] > 0)
 
-    print("MAE: ", mae)
-    print("Correlation Coefficient: ", corr)
-    print("mult_acc_7: ", mult_a7)
-    print("mult_acc_5: ", mult_a5)
-    print("F1 score: ", f_score)
-    print("Accuracy: ", accuracy_score(binary_truth, binary_preds))
+    return {
+        "mae": float(mae),
+        "corr": float(corr),
+        "mult_acc_7": float(mult_a7),
+        "mult_acc_5": float(mult_a5),
+        "f1": float(f_score),
+        "acc": float(accuracy_score(binary_truth, binary_preds)),
+    }
 
 
 def eval_mosi(results, truths, exclude_zero=False):
@@ -56,6 +68,12 @@ def eval_mosi(results, truths, exclude_zero=False):
 
 
 def eval_iemocap(results, truths):
+    metrics = get_iemocap_metrics(results, truths)
+    print("  - F1 Score: ", metrics["f1"])
+    print("  - Accuracy: ", metrics["acc"])
+
+
+def get_iemocap_metrics(results, truths):
     test_preds = results.view(-1, 4).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
 
@@ -63,11 +81,16 @@ def eval_iemocap(results, truths):
     test_truth_i = test_truth
     f1 = f1_score(test_truth_i, test_preds_i, average='weighted')
     acc = accuracy_score(test_truth_i, test_preds_i)
-    print("  - F1 Score: ", f1)
-    print("  - Accuracy: ", acc)
+    return {"f1": float(f1), "acc": float(acc)}
 
 
 def eval_meld(results, truths):
+    metrics = get_meld_metrics(results, truths)
+    print("  - F1 Score: ", metrics["f1"])
+    print("  - Accuracy: ", metrics["acc"])
+
+
+def get_meld_metrics(results, truths):
     test_preds = results.view(-1, 7).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
 
@@ -75,11 +98,19 @@ def eval_meld(results, truths):
     test_truth_i = test_truth
     f1 = f1_score(test_truth_i, test_preds_i, average='weighted')
     acc = accuracy_score(test_truth_i, test_preds_i)
-    print("  - F1 Score: ", f1)
-    print("  - Accuracy: ", acc)
+    return {"f1": float(f1), "acc": float(acc)}
 
 
 def eval_sims(results, truths, exclude_zero=False):
+    metrics = get_sims_metrics(results, truths, exclude_zero)
+    print("MAE: ", metrics["mae"])
+    print("Correlation Coefficient: ", metrics["corr"])
+    print("mult_acc_5: ", metrics["mult_acc_5"])
+    print("F1 score: ", metrics["f1"])
+    print("Accuracy: ", metrics["acc"])
+
+
+def get_sims_metrics(results, truths, exclude_zero=False):
     test_preds = results.view(-1).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
 
@@ -96,10 +127,25 @@ def eval_sims(results, truths, exclude_zero=False):
     binary_preds = (test_preds[non_zeros] > 0)
     acc2 = accuracy_score(binary_truth, binary_preds)
     
-    print("MAE: ", mae)
-    print("Correlation Coefficient: ", corr)
-    print("mult_acc_5: ", mult_a5)
-    print("F1 score: ", f_score)
-    print("Accuracy: ", acc2)
+    return {
+        "mae": float(mae),
+        "corr": float(corr),
+        "mult_acc_5": float(mult_a5),
+        "f1": float(f_score),
+        "acc": float(acc2),
+    }
 
+
+def get_metrics(dataset, results, truths):
+    if dataset == "mosei":
+        return get_mosei_metrics(results, truths, True)
+    if dataset == "mosi":
+        return get_mosei_metrics(results, truths, True)
+    if dataset == "iemocap":
+        return get_iemocap_metrics(results, truths)
+    if dataset == "meld":
+        return get_meld_metrics(results, truths)
+    if dataset == "sims":
+        return get_sims_metrics(results, truths)
+    return {}
 

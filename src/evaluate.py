@@ -37,12 +37,10 @@ def extract_prompted_sample(model, batch_X, missing_mod, hyp_params, sample_inde
         return None
 
     text, audio, vision = batch_X
-    if hyp_params.use_cuda:
-        with torch.cuda.device(0):
-            text = text.cuda()
-            audio = audio.cuda()
-            vision = vision.cuda()
-            missing_mod = missing_mod.cuda()
+    text = text.to(hyp_params.device)
+    audio = audio.to(hyp_params.device)
+    vision = vision.to(hyp_params.device)
+    missing_mod = missing_mod.to(hyp_params.device)
 
     idx = int(max(0, min(sample_index, text.size(0) - 1)))
     mode = int(missing_mod[idx].detach().cpu().item())
@@ -170,7 +168,7 @@ def _build_model_from_state_dict(state_dict, hyp_params):
 
 
 def load_model(checkpoint_path, hyp_params):
-    device = torch.device("cuda" if hyp_params.use_cuda else "cpu")
+    device = hyp_params.device
     try:
         checkpoint = torch.load(
             checkpoint_path, map_location=device, weights_only=False
@@ -189,9 +187,7 @@ def load_model(checkpoint_path, hyp_params):
             f"Unsupported checkpoint type: {type(checkpoint)}. Expected nn.Module or state_dict-like dict."
         )
 
-    if hyp_params.use_cuda:
-        model = model.cuda()
-    return model
+    return model.to(device)
 
 
 def parse_eval_modalities(eval_modalities):
@@ -240,6 +236,7 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
         base_model, "missing_type_prompt"
     )
     is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
+    use_dataparallel = hyp_params.use_cuda and torch.cuda.device_count() > 1
 
     loader = test_loader if test else valid_loader
     total_loss = 0.0
@@ -251,16 +248,13 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
             text, audio, vision = batch_X
             eval_attr = batch_Y.squeeze(dim=-1)
 
-            if hyp_params.use_cuda:
-                with torch.cuda.device(0):
-                    text, audio, vision, eval_attr = (
-                        text.cuda(),
-                        audio.cuda(),
-                        vision.cuda(),
-                        eval_attr.cuda(),
-                    )
-                    if is_classification_dataset:
-                        eval_attr = eval_attr.long()
+            text = text.to(hyp_params.device)
+            audio = audio.to(hyp_params.device)
+            vision = vision.to(hyp_params.device)
+            eval_attr = eval_attr.to(hyp_params.device)
+            if is_classification_dataset:
+                eval_attr = eval_attr.long()
+            missing_mod = missing_mod.to(hyp_params.device)
 
             # For missing-modality evaluation, always mask the raw inputs so the
             # model cannot access held-out modalities through the original tensors.
@@ -269,7 +263,7 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
             )
 
             batch_size = text.size(0)
-            net = nn.DataParallel(model) if batch_size > 10 else model
+            net = nn.DataParallel(model) if use_dataparallel and batch_size > 10 else model
             preds = net(text, audio, vision, missing_mod)
             if is_classification_dataset:
                 preds = preds.view(-1, hyp_params.output_dim)

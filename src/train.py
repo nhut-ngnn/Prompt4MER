@@ -7,6 +7,7 @@ from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from src import model as mm
+from src.eval_metrics import get_metrics
 from src.evaluate import (
     evaluate_only,
     evaluate_split,
@@ -74,8 +75,7 @@ def initiate(hyp_params, train_loader, valid_loader, test_loader):
     else:
         model = mm.Prompt4MSER(hyp_params)
 
-    if hyp_params.use_cuda:
-        model = model.cuda()
+    model = model.to(hyp_params.device)
 
     optimizer = getattr(optim, hyp_params.optim)(model.parameters(), lr=hyp_params.lr)
     criterion = getattr(nn, hyp_params.criterion)()
@@ -102,6 +102,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
         model.train()
         num_batches = hyp_params.n_train // hyp_params.batch_size
         is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
+        use_dataparallel = hyp_params.use_cuda and torch.cuda.device_count() > 1
         proc_total_loss, proc_task_loss, proc_align_loss, proc_size = 0, 0, 0, 0
         use_alignment_loss = (
             bool(getattr(hyp_params, "enable_feature_alignment_loss", False))
@@ -117,19 +118,16 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
             eval_attr = batch_Y.squeeze(-1)
             model.zero_grad()
 
-            if hyp_params.use_cuda:
-                with torch.cuda.device(0):
-                    text, audio, vision, eval_attr = (
-                        text.cuda(),
-                        audio.cuda(),
-                        vision.cuda(),
-                        eval_attr.cuda(),
-                    )
-                    if is_classification_dataset:
-                        eval_attr = eval_attr.long()
+            text = text.to(hyp_params.device)
+            audio = audio.to(hyp_params.device)
+            vision = vision.to(hyp_params.device)
+            eval_attr = eval_attr.to(hyp_params.device)
+            if is_classification_dataset:
+                eval_attr = eval_attr.long()
+            missing_mod = missing_mod.to(hyp_params.device)
 
             batch_size = text.size(0)
-            net = nn.DataParallel(model) if batch_size > 10 else model
+            net = nn.DataParallel(model) if use_dataparallel and batch_size > 10 else model
             if use_alignment_loss:
                 aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
                 preds = aux_outputs["logits"]
@@ -237,3 +235,9 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
     print_metrics(hyp_params, test_results, test_truths)
     print("=" * 50)
     print_prompted_sample(model, test_loader, hyp_params, "Best checkpoint prompted sample")
+    return {
+        "valid_loss": float(best_valid_loss),
+        "test_loss": float(best_test_loss),
+        "valid_metrics": get_metrics(hyp_params.dataset, valid_results, valid_truths),
+        "test_metrics": get_metrics(hyp_params.dataset, test_results, test_truths),
+    }

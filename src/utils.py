@@ -127,7 +127,6 @@ def transfer_model(new_model, pretrained):
 
     new_dict.update(transferred)
     new_model.load_state_dict(new_dict)
-    for name, param in new_model.named_parameters():
-        if name in transferred:
-            param.requires_grad = False
+    for _, param in new_model.named_parameters():
+        param.requires_grad = True
     return new_model
