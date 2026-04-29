@@ -94,15 +94,15 @@ parser.add_argument("--prompt_length", type=int, default=16)
 parser.add_argument(
     "--fusion_head_output_type",
     type=str,
-    default="mean",
-    choices=["cls", "mean", "max", "concat"],
+    default="attn",
+    choices=["mean", "max", "attn"],
     help="readout strategy for 4M-SER fusion head",
 )
 parser.add_argument(
     "--audio_norm_type",
     type=str,
     default="none",
-    choices=["none", "layer_norm", "min_max"],
+    choices=["none", "min_max"],
     help="audio feature normalization in 4M-SER",
 )
 parser.add_argument(
@@ -150,15 +150,28 @@ parser.add_argument(
     help="optional .pt path to save one prompted sample",
 )
 parser.add_argument(
-    "--enable_feature_alignment_loss",
-    action="store_true",
-    help="enable cosine-similarity alignment loss on generated features",
-)
-parser.add_argument(
-    "--lambda_align",
+    "--lambda_rec",
     type=float,
     default=0.1,
-    help="weight for cosine-similarity alignment loss",
+    help="weight for reconstruction loss in Prompt4MSER loss",
+)
+parser.add_argument(
+    "--lambda_cos",
+    type=float,
+    default=0.05,
+    help="weight for cosine loss in Prompt4MSER loss",
+)
+parser.add_argument(
+    "--max_missing_prob",
+    type=float,
+    default=0.5,
+    help="maximum missing-modality probability for training sampler",
+)
+parser.add_argument(
+    "--double_missing_prob",
+    type=float,
+    default=0.25,
+    help="probability of sampling two missing modalities when a sample is masked",
 )
 args = parser.parse_args()
 

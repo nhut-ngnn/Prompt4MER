@@ -1,21 +1,33 @@
 import random
+import os
 import numpy as np
 from torch.utils.data.dataset import Dataset
 import pickle
 import torch
 
-if torch.cuda.is_available():
-    torch.set_default_tensor_type("torch.cuda.FloatTensor")
-else:
-    torch.set_default_tensor_type("torch.FloatTensor")
-
 
 class MOSIData(Dataset):
+    DEFAULT_FILENAMES = ("mosi_data.pkl", "mosi_raw.pkl")
+
     def __init__(
         self, dataset_path, split_type="train", drop_rate=0.6, full_data=False
     ):
         super(MOSIData, self).__init__()
-        dataset = pickle.load(open(dataset_path, "rb"))
+        dataset_path = self._resolve_dataset_path(dataset_path)
+        with open(dataset_path, "rb") as f:
+            dataset = pickle.load(f)
+        if split_type not in dataset:
+            raise KeyError(
+                f"Split '{split_type}' was not found in {dataset_path}. "
+                f"Available splits: {sorted(dataset.keys())}"
+            )
+        for key in ["text", "audio", "vision", "labels"]:
+            if key not in dataset[split_type]:
+                raise KeyError(
+                    f"Required key '{key}' was not found in split '{split_type}' "
+                    f"from {dataset_path}"
+                )
+
         self.vision = (
             torch.tensor(dataset[split_type]["vision"].astype(np.float32))
             .cpu()
@@ -37,6 +49,49 @@ class MOSIData(Dataset):
         self.full_data = full_data
         self.fixed_missing_mode = None
         self.n_modalities = 3  # vision/ text/ audio
+
+    @classmethod
+    def _resolve_dataset_path(cls, dataset_path):
+        if dataset_path:
+            dataset_path = os.path.expanduser(dataset_path)
+            if os.path.isdir(dataset_path):
+                for filename in cls.DEFAULT_FILENAMES:
+                    candidate = os.path.join(dataset_path, filename)
+                    if os.path.isfile(candidate):
+                        return candidate
+                pkl_candidates = sorted(
+                    os.path.join(dataset_path, name)
+                    for name in os.listdir(dataset_path)
+                    if name.endswith(".pkl")
+                )
+                if pkl_candidates:
+                    return pkl_candidates[0]
+                raise FileNotFoundError(
+                    f"No MOSI pickle file found under directory: {dataset_path}"
+                )
+            if os.path.isfile(dataset_path):
+                return dataset_path
+            raise FileNotFoundError(f"MOSI data path does not exist: {dataset_path}")
+
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        workspace_root = os.path.dirname(project_root)
+        search_dirs = [
+            os.path.join(workspace_root, "mosi"),
+            os.path.join(project_root, "mosi"),
+            os.path.join(os.getcwd(), "mosi"),
+            os.getcwd(),
+        ]
+        for directory in search_dirs:
+            for filename in cls.DEFAULT_FILENAMES:
+                candidate = os.path.join(directory, filename)
+                if os.path.isfile(candidate):
+                    return candidate
+
+        searched = ", ".join(search_dirs)
+        raise FileNotFoundError(
+            "MOSI data path was not provided and no default pickle was found. "
+            f"Searched these directories: {searched}"
+        )
 
     def get_n_modalities(self):
         return self.n_modalities

@@ -1,5 +1,45 @@
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score
+
+try:
+    from sklearn.metrics import accuracy_score, f1_score
+except ModuleNotFoundError:
+    def accuracy_score(y_true, y_pred):
+        y_true = np.asarray(y_true).reshape(-1)
+        y_pred = np.asarray(y_pred).reshape(-1)
+        return np.mean(y_true == y_pred)
+
+    def f1_score(y_true, y_pred, average="weighted"):
+        y_true = np.asarray(y_true).reshape(-1)
+        y_pred = np.asarray(y_pred).reshape(-1)
+        labels = np.union1d(y_true, y_pred)
+        f1_values = []
+        supports = []
+        for label in labels:
+            true_label = y_true == label
+            pred_label = y_pred == label
+            tp = np.sum(true_label & pred_label)
+            fp = np.sum(~true_label & pred_label)
+            fn = np.sum(true_label & ~pred_label)
+            precision = tp / (tp + fp) if (tp + fp) else 0.0
+            recall = tp / (tp + fn) if (tp + fn) else 0.0
+            score = (
+                2.0 * precision * recall / (precision + recall)
+                if (precision + recall)
+                else 0.0
+            )
+            f1_values.append(score)
+            supports.append(np.sum(true_label))
+
+        f1_values = np.asarray(f1_values, dtype=np.float64)
+        supports = np.asarray(supports, dtype=np.float64)
+        if average == "weighted":
+            total = supports.sum()
+            return np.sum(f1_values * supports) / total if total else 0.0
+        if average == "macro":
+            return np.mean(f1_values) if f1_values.size else 0.0
+        if average is None:
+            return f1_values
+        raise ValueError(f"Unsupported fallback f1 average: {average}")
 
 
 def multiclass_acc(preds, truths):
@@ -148,4 +188,3 @@ def get_metrics(dataset, results, truths):
     if dataset == "sims":
         return get_sims_metrics(results, truths)
     return {}
-

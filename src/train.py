@@ -1,7 +1,6 @@
 import time
 
 import torch
-import torch.nn.functional as F
 import torch.optim as optim
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -11,59 +10,12 @@ from src.eval_metrics import get_metrics
 from src.evaluate import (
     evaluate_only,
     evaluate_split,
-    get_underlying_model,
     load_model,
     print_metrics,
     print_prompted_sample,
 )
 from src.utils import transfer_model
 
-
-def _supports_feature_alignment(model):
-    base_model = get_underlying_model(model)
-    return hasattr(base_model, "get_complete_data") and hasattr(
-        base_model, "missing_type_prompt"
-    )
-
-
-def _cosine_alignment_loss(generated: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
-    generated = generated.reshape(1, -1)
-    real = real.reshape(1, -1)
-    return 1.0 - F.cosine_similarity(generated, real, dim=1).mean()
-
-
-def _compute_feature_alignment_loss(aux_outputs, missing_mod):
-    generated = aux_outputs.get("raw_generated_features")
-    real = aux_outputs.get("real_features")
-    if generated is None or real is None:
-        zero = aux_outputs["logits"].new_tensor(0.0)
-        return zero
-
-    ref_tensor = generated["text"]
-    missing_mod = missing_mod.to(ref_tensor.device).long().view(-1)
-
-    total_loss = ref_tensor.new_tensor(0.0)
-    count = 0
-    for i, mode in enumerate(missing_mod.tolist()):
-        if mode in [0, 3, 4]:
-            total_loss = total_loss + _cosine_alignment_loss(
-                generated["text"][i], real["text"][i]
-            )
-            count += 1
-        if mode in [1, 3, 5]:
-            total_loss = total_loss + _cosine_alignment_loss(
-                generated["audio"][i], real["audio"][i]
-            )
-            count += 1
-        if mode in [2, 4, 5]:
-            total_loss = total_loss + _cosine_alignment_loss(
-                generated["vision"][i], real["vision"][i]
-            )
-            count += 1
-
-    if count == 0:
-        return ref_tensor.new_tensor(0.0)
-    return total_loss / float(count)
 
 def initiate(hyp_params, train_loader, valid_loader, test_loader):
     if hyp_params.eval_only:
@@ -103,14 +55,17 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
         num_batches = hyp_params.n_train // hyp_params.batch_size
         is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
         use_dataparallel = hyp_params.use_cuda and torch.cuda.device_count() > 1
-        proc_total_loss, proc_task_loss, proc_align_loss, proc_size = 0, 0, 0, 0
-        use_alignment_loss = (
-            bool(getattr(hyp_params, "enable_feature_alignment_loss", False))
-            and _supports_feature_alignment(model)
+        proc_total_loss, proc_task_loss, proc_rec_loss, proc_cos_loss, proc_size = (
+            0,
+            0,
+            0,
+            0,
+            0,
         )
-        lambda_align = (
-            float(getattr(hyp_params, "lambda_align", 0.1)) if use_alignment_loss else 0.0
-        )
+        lambda_rec = float(getattr(hyp_params, "lambda_rec", 0.1))
+        lambda_cos = float(getattr(hyp_params, "lambda_cos", 0.05))
+        max_missing_prob = float(getattr(hyp_params, "max_missing_prob", 0.5))
+        double_missing_prob = float(getattr(hyp_params, "double_missing_prob", 0.25))
         start_time = time.time()
 
         for i_batch, (batch_X, batch_Y, missing_mod) in enumerate(train_loader):
@@ -124,26 +79,38 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
             eval_attr = eval_attr.to(hyp_params.device)
             if is_classification_dataset:
                 eval_attr = eval_attr.long()
-            missing_mod = missing_mod.to(hyp_params.device)
 
             batch_size = text.size(0)
             net = nn.DataParallel(model) if use_dataparallel and batch_size > 10 else model
-            if use_alignment_loss:
-                aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
-                preds = aux_outputs["logits"]
-            else:
-                preds = net(text, audio, vision, missing_mod)
-
             if is_classification_dataset:
-                preds = preds.view(-1, hyp_params.output_dim)
-                eval_attr = eval_attr.view(-1)
-            task_loss = criterion(preds, eval_attr)
-            if use_alignment_loss:
-                align_loss = _compute_feature_alignment_loss(aux_outputs, missing_mod)
-                total_loss = task_loss + lambda_align * align_loss
+                missing_mod = mm.sample_missing_mod(
+                    batch_size=batch_size,
+                    device=hyp_params.device,
+                    epoch=epoch,
+                    max_epoch=hyp_params.num_epochs,
+                    max_missing_prob=max_missing_prob,
+                    double_missing_prob=double_missing_prob,
+                )
+                aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
+                loss_dict = mm.prompt4mser_loss(
+                    outputs=aux_outputs,
+                    labels=eval_attr.view(-1),
+                    missing_mod=missing_mod,
+                    class_weights=None,
+                    lambda_rec=lambda_rec,
+                    lambda_cos=lambda_cos,
+                )
+                total_loss = loss_dict["loss"]
+                task_loss = loss_dict["loss_cls"]
+                rec_loss = loss_dict["loss_rec"]
+                cos_loss = loss_dict["loss_cos"]
             else:
-                align_loss = task_loss.new_tensor(0.0)
+                missing_mod = missing_mod.to(hyp_params.device)
+                preds = net(text, audio, vision, missing_mod)
+                task_loss = criterion(preds, eval_attr)
                 total_loss = task_loss
+                rec_loss = task_loss.new_tensor(0.0)
+                cos_loss = task_loss.new_tensor(0.0)
 
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), hyp_params.clip)
@@ -151,26 +118,28 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
             proc_total_loss += total_loss.item() * batch_size
             proc_task_loss += task_loss.item() * batch_size
-            proc_align_loss += align_loss.item() * batch_size
+            proc_rec_loss += rec_loss.item() * batch_size
+            proc_cos_loss += cos_loss.item() * batch_size
             proc_size += batch_size
 
             if i_batch % hyp_params.log_interval == 0 and i_batch > 0:
                 avg_total_loss = proc_total_loss / proc_size
                 avg_task_loss = proc_task_loss / proc_size
-                avg_align_loss = proc_align_loss / proc_size
+                avg_rec_loss = proc_rec_loss / proc_size
+                avg_cos_loss = proc_cos_loss / proc_size
                 elapsed_time = time.time() - start_time
-                if use_alignment_loss:
+                if is_classification_dataset:
                     print(
                         "Epoch {:2d} | Batch {:3d}/{:3d} | Time/Batch(ms) {:5.2f} | "
-                        "Task Loss {:5.4f} | Align Loss {:5.4f} | "
-                        "lambda_align {:5.4f} | Total Loss {:5.4f}".format(
+                        "Cls Loss {:5.4f} | Rec Loss {:5.4f} | Cos Loss {:5.4f} | "
+                        "Total Loss {:5.4f}".format(
                             epoch,
                             i_batch,
                             num_batches,
                             elapsed_time * 1000 / hyp_params.log_interval,
                             avg_task_loss,
-                            avg_align_loss,
-                            lambda_align,
+                            avg_rec_loss,
+                            avg_cos_loss,
                             avg_total_loss,
                         )
                     )
@@ -184,7 +153,13 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                             avg_total_loss,
                         )
                     )
-                proc_total_loss, proc_task_loss, proc_align_loss, proc_size = 0, 0, 0, 0
+                proc_total_loss, proc_task_loss, proc_rec_loss, proc_cos_loss, proc_size = (
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                )
                 start_time = time.time()
 
     best_valid = 1e8

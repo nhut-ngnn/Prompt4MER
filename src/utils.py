@@ -2,7 +2,6 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.iemocap_feature_data import IEMOCAPFeatureData
-from src.meld_feature_data import MELDFeatureData
 from src.mosidata import MOSIData
 from src.simsdata import SIMSData
 
@@ -19,6 +18,13 @@ def get_data(args, split="train", full_data=False):
             v_type=getattr(args, "v_type", None),
         )
     elif args.dataset == "meld":
+        try:
+            from src.meld_feature_data import MELDFeatureData
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "MELD dataset support requires src/meld_feature_data.py. "
+                "That file is not present in the current worktree."
+            ) from exc
         data = MELDFeatureData(
             data_path=args.data_path,
             split_type=split,
@@ -106,12 +112,20 @@ def transfer_model(new_model, pretrained):
         "classifer.weight",
         "classifer.bias",
     }
+    obsolete_prefixes = (
+        "text_gate.1.",
+        "audio_gate.1.",
+        "vision_gate.1.",
+    )
 
     new_dict = new_model.state_dict()
     transferred = {}
     for k, v in pretrain_dict.items():
+        if k.startswith(obsolete_prefixes):
+            print("Skipped obsolete pretrained key :{}".format(k))
+            continue
         if k not in new_dict:
-            print("Missing key(s) in state_dict :{}".format(k))
+            print("Unexpected pretrained key :{}".format(k))
             continue
         if k in skip_keys:
             print("Skipped pretrained key :{}".format(k))
