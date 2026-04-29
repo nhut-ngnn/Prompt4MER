@@ -122,7 +122,6 @@ parser.add_argument("--lr", type=float, default=1e-3, help="initial learning rat
 parser.add_argument("--optim", type=str, default="Adam", help="optimizer to use")
 parser.add_argument("--num_epochs", type=int, default=40, help="number of epochs")
 parser.add_argument("--when", type=int, default=10, help="when to decay learning rate")
-parser.add_argument("--drop_rate", type=float, default=0.6)
 
 
 # Logistics

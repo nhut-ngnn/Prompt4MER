@@ -1,7 +1,6 @@
 import glob
 import os
 import pickle
-import random
 
 import numpy as np
 import torch
@@ -20,7 +19,6 @@ class IEMOCAPFeatureData(Dataset):
         self,
         data_path,
         split_type="train",
-        drop_rate=0.6,
         full_data=False,
         l_type=None,
         a_type=None,
@@ -28,7 +26,6 @@ class IEMOCAPFeatureData(Dataset):
     ):
         super(IEMOCAPFeatureData, self).__init__()
         split_name = self.SPLIT_MAP.get(split_type, split_type)
-        self.drop_rate = drop_rate
         self.full_data = full_data
         self.fixed_missing_mode = None
 
@@ -146,10 +143,6 @@ class IEMOCAPFeatureData(Dataset):
     def get_missing_mode(self):
         if self.fixed_missing_mode is not None:
             return self.fixed_missing_mode
-        if self.full_data:
-            return 6
-        if random.random() < self.drop_rate:
-            return random.randint(0, 5)
         return 6
 
     def __len__(self):

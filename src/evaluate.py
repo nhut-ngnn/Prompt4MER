@@ -310,7 +310,7 @@ def evaluate_only(hyp_params, valid_loader, test_loader):
     requested_modalities = parse_eval_modalities(hyp_params.eval_modalities)
 
     if requested_modalities is None:
-        print("Eval-only uses complete samples (fixed_missing_mode=6); --drop_rate is ignored.")
+        print("Eval-only uses complete samples (fixed_missing_mode=6).")
 
     if requested_modalities is not None and not supports_prompt_missing:
         print("Checkpoint does not expose prompt-missing handlers. Applying input masking.")

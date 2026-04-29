@@ -1,4 +1,3 @@
-import random
 import os
 import numpy as np
 from torch.utils.data.dataset import Dataset
@@ -9,9 +8,7 @@ import torch
 class MOSIData(Dataset):
     DEFAULT_FILENAMES = ("mosi_data.pkl", "mosi_raw.pkl")
 
-    def __init__(
-        self, dataset_path, split_type="train", drop_rate=0.6, full_data=False
-    ):
+    def __init__(self, dataset_path, split_type="train", full_data=False):
         super(MOSIData, self).__init__()
         dataset_path = self._resolve_dataset_path(dataset_path)
         with open(dataset_path, "rb") as f:
@@ -45,7 +42,6 @@ class MOSIData(Dataset):
             .detach()
         )
 
-        self.drop_rate = drop_rate
         self.full_data = full_data
         self.fixed_missing_mode = None
         self.n_modalities = 3  # vision/ text/ audio
@@ -108,12 +104,7 @@ class MOSIData(Dataset):
     def get_missing_mode(self):
         if self.fixed_missing_mode is not None:
             return self.fixed_missing_mode
-        if self.full_data:
-            return 6
-        if random.random() < self.drop_rate:
-            return random.randint(0, 5)
-        else:
-            return 6
+        return 6
 
     def __len__(self):
         return len(self.labels)

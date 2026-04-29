@@ -11,7 +11,6 @@ def get_data(args, split="train", full_data=False):
         data = IEMOCAPFeatureData(
             data_path=args.data_path,
             split_type=split,
-            drop_rate=args.drop_rate,
             full_data=full_data,
             l_type=getattr(args, "l_type", None),
             a_type=getattr(args, "a_type", None),
@@ -28,20 +27,15 @@ def get_data(args, split="train", full_data=False):
         data = MELDFeatureData(
             data_path=args.data_path,
             split_type=split,
-            drop_rate=args.drop_rate,
             full_data=full_data,
             l_type=getattr(args, "l_type", None),
             a_type=getattr(args, "a_type", None),
             v_type=getattr(args, "v_type", None),
         )
     elif args.dataset == "mosi" or args.dataset == "mosei":
-        data = MOSIData(
-            args.data_path, split, drop_rate=args.drop_rate, full_data=full_data
-        )
+        data = MOSIData(args.data_path, split, full_data=full_data)
     elif args.dataset == "sims":
-        data = SIMSData(
-            args.data_path, split, drop_rate=args.drop_rate, full_data=full_data
-        )
+        data = SIMSData(args.data_path, split, full_data=full_data)
     return data
 
 

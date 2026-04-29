@@ -3,7 +3,6 @@ import torch
 import numpy as np
 import h5py
 from torch.nn.utils.rnn import pad_sequence
-import random
 import torch.utils.data as data
 from PIL import Image
 import torchvision.transforms as transforms
@@ -173,7 +172,7 @@ def __print_size_warning(ow, oh, w, h):
 
 
 class IEMOData(BaseDataset):
-    def __init__(self, opt, data_path, set_name, drop_rate, full_data=False):
+    def __init__(self, opt, data_path, set_name, full_data=False):
         """IEMOCAP dataset reader
         set_name in ['trn', 'val', 'tst']
         """
@@ -182,7 +181,6 @@ class IEMOData(BaseDataset):
         # record & load basic settings
         cvNo = opt.cvNo
         self.set_name = set_name
-        self.drop_rate = drop_rate
         self.full_data = full_data
         self.fixed_missing_mode = None
         config = {
@@ -291,12 +289,7 @@ class IEMOData(BaseDataset):
     def get_missing_mode(self):
         if self.fixed_missing_mode is not None:
             return self.fixed_missing_mode
-        if self.full_data:
-            return 6
-        if random.random() < self.drop_rate:
-            return random.randint(0, 5)
-        else:
-            return 6
+        return 6
 
     def calc_mean_std(self):
         utt_ids = [utt_id for utt_id in self.all_A.keys()]

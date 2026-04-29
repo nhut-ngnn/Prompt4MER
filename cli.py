@@ -71,7 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--optim", type=str, default="Adam")
     parser.add_argument("--num_epochs", type=int, default=40)
     parser.add_argument("--when", type=int, default=10)
-    parser.add_argument("--drop_rate", type=float, default=0.6)
 
     # New Prompt4MSER training loss / missing-modality sampler.
     parser.add_argument("--lambda_rec", type=float, default=0.1)

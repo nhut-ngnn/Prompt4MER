@@ -1,17 +1,15 @@
 import torch
 from torch.utils.data import Dataset
 import pickle
-import random
 
 
 class SIMSData(Dataset):
-    def __init__(self, data_path, split, drop_rate, full_data=False):
+    def __init__(self, data_path, split, full_data=False):
         super(SIMSData, self).__init__()
         with open(data_path, 'rb') as file:
             data = pickle.load(file)
         self.data = data[split]
         self.split = split
-        self.drop_rate = drop_rate
         self.full_data = full_data
         self.fixed_missing_mode = None
         self.orig_dims = [
@@ -32,12 +30,7 @@ class SIMSData(Dataset):
     def get_missing_mode(self):
         if self.fixed_missing_mode is not None:
             return self.fixed_missing_mode
-        if self.full_data:
-            return 6
-        if random.random() < self.drop_rate:
-            return random.randint(0, 5) 
-        else:
-            return 6
+        return 6
 
 
     def __getitem__(self, idx):
