@@ -154,7 +154,7 @@ class Prompt4MSER(nn.Module):
         self.num_heads = self._get_valid_num_heads(self.d_model, requested_heads)
 
         self.pooling_type = getattr(hyp_params, "fusion_head_output_type", "attn").lower()
-        valid_pooling = {"cls", "mean", "max", "attn", "concat"}
+        valid_pooling = {"mean", "max", "attn", "concat"}
         if self.pooling_type not in valid_pooling:
             raise ValueError(
                 f"Invalid fusion_head_output_type={self.pooling_type}. Use one of {valid_pooling}."
@@ -189,9 +189,6 @@ class Prompt4MSER(nn.Module):
         self.missing_type_prompt = nn.Parameter(
             torch.zeros(7, self.prompt_length, self.d_model)
         )
-
-        # Optional CLS token for CLS pooling.
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.d_model))
 
         # 3) Gated blending between missing prompt and generated feature.
         self.text_gate = self._make_gate()
@@ -357,7 +354,6 @@ class Prompt4MSER(nn.Module):
         nn.init.normal_(self.prompta_miss, mean=0.0, std=prompt_std)
         nn.init.normal_(self.promptv_miss, mean=0.0, std=prompt_std)
         nn.init.normal_(self.missing_type_prompt, mean=0.0, std=prompt_std)
-        nn.init.normal_(self.cls_token, mean=0.0, std=prompt_std)
 
     def _project_inputs(
         self,
@@ -650,9 +646,6 @@ class Prompt4MSER(nn.Module):
         return completed_l, completed_a, completed_v
 
     def _pool_fusion(self, fusion_norm: torch.Tensor) -> torch.Tensor:
-        if self.pooling_type == "cls":
-            return fusion_norm[:, 0]
-
         if self.pooling_type == "mean":
             return fusion_norm.mean(dim=1)
 
@@ -722,10 +715,6 @@ class Prompt4MSER(nn.Module):
             [completed_l, completed_a, completed_v, type_prompt],
             dim=1,
         )
-
-        if self.pooling_type == "cls":
-            cls = self.cls_token.expand(batch_size, -1, -1)
-            fusion_embeddings = torch.cat([cls, fusion_embeddings], dim=1)
 
         fusion_attention, fusion_attn_weights = self.fusion_attention(
             fusion_embeddings,
