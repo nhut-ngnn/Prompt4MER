@@ -113,77 +113,6 @@ class ModalitySelfAttention(nn.Module):
         return x, attn_weights
 
 
-class TriModalGMUFusion(nn.Module):
-    """
-    Feature-wise GMU fusion for text, audio, and vision representations.
-
-    Input:
-        h_l, h_a, h_v: [B, D]
-
-    Output:
-        fused: [B, D]
-        gates: [B, 3, D]
-    """
-
-    def __init__(self, d_model: int, dropout: float = 0.1):
-        super().__init__()
-        self.d_model = int(d_model)
-
-        self.text_proj = nn.Sequential(
-            nn.LayerNorm(self.d_model),
-            nn.Linear(self.d_model, self.d_model),
-            nn.Tanh(),
-            nn.Dropout(dropout),
-        )
-        self.audio_proj = nn.Sequential(
-            nn.LayerNorm(self.d_model),
-            nn.Linear(self.d_model, self.d_model),
-            nn.Tanh(),
-            nn.Dropout(dropout),
-        )
-        self.vision_proj = nn.Sequential(
-            nn.LayerNorm(self.d_model),
-            nn.Linear(self.d_model, self.d_model),
-            nn.Tanh(),
-            nn.Dropout(dropout),
-        )
-
-        self.gate_layer = nn.Sequential(
-            nn.LayerNorm(3 * self.d_model),
-            nn.Linear(3 * self.d_model, 3 * self.d_model),
-        )
-
-        self.output_norm = nn.LayerNorm(self.d_model)
-        self.output_dropout = nn.Dropout(dropout)
-
-    def forward(
-        self,
-        h_l: torch.Tensor,
-        h_a: torch.Tensor,
-        h_v: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        h_l_tilde = self.text_proj(h_l)
-        h_a_tilde = self.audio_proj(h_a)
-        h_v_tilde = self.vision_proj(h_v)
-
-        gate_input = torch.cat([h_l, h_a, h_v], dim=-1)
-        gate_logits = self.gate_layer(gate_input)
-
-        batch_size = h_l.size(0)
-        gates = gate_logits.view(batch_size, 3, self.d_model)
-        gates = torch.softmax(gates, dim=1)
-
-        fused = (
-            gates[:, 0, :] * h_l_tilde
-            + gates[:, 1, :] * h_a_tilde
-            + gates[:, 2, :] * h_v_tilde
-        )
-        fused = self.output_norm(fused)
-        fused = self.output_dropout(fused)
-
-        return fused, gates
-
-
 class Prompt4MSER(nn.Module):
     """
     Revised Prompt-augmented 4M-SER model for three modalities:
@@ -341,21 +270,40 @@ class Prompt4MSER(nn.Module):
             self.dropout,
         )
 
-        # 6) Modality readout + feature-wise GMU fusion.
-        self.modality_pool_score = nn.Sequential(
-            nn.Linear(self.d_model, self.d_model),
+        # 6) Joint fusion attention.
+        self.fusion_attention = nn.MultiheadAttention(
+            embed_dim=self.d_model,
+            num_heads=self.num_heads,
+            dropout=self.dropout,
+            batch_first=True,
+        )
+
+        # After fusion, concatenate original token and attended token -> 2D.
+        self.fusion_dim = 2 * self.d_model
+        self.fusion_layer_norm = nn.LayerNorm(self.fusion_dim)
+        self.fusion_dropout = nn.Dropout(self.dropout)
+
+        self.fusion_ffn = nn.Sequential(
+            nn.Linear(self.fusion_dim, 4 * self.fusion_dim),
+            nn.GELU(),
+            nn.Dropout(self.dropout),
+            nn.Linear(4 * self.fusion_dim, self.fusion_dim),
+            nn.Dropout(self.dropout),
+        )
+        self.fusion_ffn_norm = nn.LayerNorm(self.fusion_dim)
+
+        # Attention pooling.
+        self.pool_score = nn.Sequential(
+            nn.Linear(self.fusion_dim, self.d_model),
             nn.Tanh(),
             nn.Linear(self.d_model, 1),
         )
-        self.modality_concat_project = nn.Sequential(
-            nn.LayerNorm(2 * self.d_model),
-            nn.Linear(2 * self.d_model, self.d_model),
-            nn.GELU(),
-            nn.Dropout(self.dropout),
-        )
 
-        self.gmu_fusion = TriModalGMUFusion(self.d_model, self.dropout)
-        self.head_dim = self.d_model
+        # Determine classifier input dimension.
+        if self.pooling_type == "concat":
+            self.head_dim = 2 * self.fusion_dim  # mean + max
+        else:
+            self.head_dim = self.fusion_dim
 
         # 7) Classifier head.
         self.classifier = nn.Sequential(
@@ -697,22 +645,22 @@ class Prompt4MSER(nn.Module):
         )
         return completed_l, completed_a, completed_v
 
-    def _pool_modality(self, modality_seq: torch.Tensor) -> torch.Tensor:
+    def _pool_fusion(self, fusion_norm: torch.Tensor) -> torch.Tensor:
         if self.pooling_type == "mean":
-            return modality_seq.mean(dim=1)
+            return fusion_norm.mean(dim=1)
 
         if self.pooling_type == "max":
-            return modality_seq.max(dim=1).values
+            return fusion_norm.max(dim=1).values
 
         if self.pooling_type == "concat":
-            mean_pool = modality_seq.mean(dim=1)
-            max_pool = modality_seq.max(dim=1).values
-            return self.modality_concat_project(torch.cat([mean_pool, max_pool], dim=-1))
+            mean_pool = fusion_norm.mean(dim=1)
+            max_pool = fusion_norm.max(dim=1).values
+            return torch.cat([mean_pool, max_pool], dim=-1)
 
-        # Default option: attention pooling over each modality sequence.
-        score = self.modality_pool_score(modality_seq)  # [B, T, 1]
+        # Default and recommended option: attention pooling.
+        score = self.pool_score(fusion_norm)       # [B, T, 1]
         weight = torch.softmax(score, dim=1)       # [B, T, 1]
-        pooled = torch.sum(weight * modality_seq, dim=1)
+        pooled = torch.sum(weight * fusion_norm, dim=1)
         return pooled
 
     def forward(
@@ -761,13 +709,33 @@ class Prompt4MSER(nn.Module):
         completed_a, audio_attn = self.audio_attention(completed_a)
         completed_v, vision_attn = self.vision_attention(completed_v)
 
-        # 5) Pool each modality and fuse with feature-wise tri-modal GMU.
-        text_pooled = self._pool_modality(completed_l)
-        audio_pooled = self._pool_modality(completed_a)
-        vision_pooled = self._pool_modality(completed_v)
-        pooled, fusion_gates = self.gmu_fusion(text_pooled, audio_pooled, vision_pooled)
+        # 5) Joint fusion tokens.
+        type_prompt = self.missing_type_prompt[missing_mod]  # [B, P, D]
+        fusion_embeddings = torch.cat(
+            [completed_l, completed_a, completed_v, type_prompt],
+            dim=1,
+        )
 
-        # 6) Classify.
+        fusion_attention, fusion_attn_weights = self.fusion_attention(
+            fusion_embeddings,
+            fusion_embeddings,
+            fusion_embeddings,
+            average_attn_weights=False,
+        )
+
+        fusion_concat = torch.cat(
+            [fusion_embeddings, self.fusion_dropout(fusion_attention)],
+            dim=-1,
+        )
+        fusion_norm = self.fusion_layer_norm(fusion_concat)
+
+        # Transformer-style FFN after fusion attention.
+        fusion_norm = self.fusion_ffn_norm(
+            fusion_norm + self.fusion_ffn(fusion_norm)
+        )
+
+        # 6) Pool and classify.
+        pooled = self._pool_fusion(fusion_norm)
         logits = self.classifier(pooled)
 
         if not return_aux:
@@ -791,17 +759,12 @@ class Prompt4MSER(nn.Module):
                 "audio": real_a_n,
                 "vision": real_v_n,
             },
-            "modality_pooled_features": {
-                "text": text_pooled,
-                "audio": audio_pooled,
-                "vision": vision_pooled,
-            },
-            "fusion_features": pooled,
-            "fusion_gates": fusion_gates,
+            "fusion_features": fusion_norm,
             "attentions": {
                 "text_attn": text_attn,
                 "audio_attn": audio_attn,
                 "vision_attn": vision_attn,
+                "fusion_attn": fusion_attn_weights,
             },
             "missing_mod": missing_mod,
         }
