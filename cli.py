@@ -55,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attn_mask", action="store_false")
     parser.add_argument("--prompt_dim", type=int, default=30)
     parser.add_argument("--prompt_length", type=int, default=16)
+    parser.add_argument("--cross_attn_heads", type=int, default=0)
+    parser.add_argument("--prompt_dropout", type=float, default=0.0)
+    parser.add_argument("--missing_modality_dropout", type=float, default=0.0)
     parser.add_argument(
         "--fusion_head_output_type",
         type=str,
@@ -72,9 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_epochs", type=int, default=40)
     parser.add_argument("--when", type=int, default=10)
 
-    # New Prompt4MSER training loss / missing-modality sampler.
-    parser.add_argument("--lambda_rec", type=float, default=0.1)
-    parser.add_argument("--lambda_cos", type=float, default=0.05)
+    # Prompt model training loss / missing-modality sampler.
+    parser.add_argument("--lambda_consistency", type=float, default=0.0)
     parser.add_argument("--max_missing_prob", type=float, default=0.5)
     parser.add_argument("--double_missing_prob", type=float, default=0.25)
 

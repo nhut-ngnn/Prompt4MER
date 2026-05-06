@@ -21,13 +21,19 @@ class PhoBERTEmbeddingModel(nn.Module):
 
 
 class BERTEmbeddingModel(nn.Module):
-    def __init__(self, embedding_dim=768, projection_dim=512):
+    def __init__(
+        self,
+        embedding_dim=None,
+        projection_dim=512,
+        model_name="bert-large-uncased",
+    ):
         super().__init__()
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
+        self.bert = BertModel.from_pretrained(model_name)
+        hidden_size = int(self.bert.config.hidden_size)
         self.project = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
+            nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(embedding_dim, projection_dim)
+            nn.Linear(hidden_size, projection_dim)
         )
 
     def forward(self, input_ids, attention_mask):

@@ -20,7 +20,7 @@ Fine-tune:
 
 ```bash
 python main.py \
-  --pretrained_model ./checkpoints/mosei_4mser_concat_pretrain.pt \
+  --pretrained_model ./checkpoints/iemocap_4mser_concat_pretrain.pt \
   --dataset iemocap \
   --data_path feature/ \
   --linear_layer_output 512,256 \

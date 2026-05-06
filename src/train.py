@@ -22,10 +22,15 @@ def initiate(hyp_params, train_loader, valid_loader, test_loader):
         return evaluate_only(hyp_params, valid_loader, test_loader)
 
     if hyp_params.pretrained_model is not None:
-        model = mm.Prompt4MSER(hyp_params)
+        model = mm.DualStreamPromptLearningNetwork(hyp_params)
         model = transfer_model(model, hyp_params.pretrained_model)
     else:
-        model = mm.Prompt4MSER(hyp_params)
+        model = mm.DualStreamPromptLearningNetwork(hyp_params)
+
+    if float(getattr(hyp_params, "lambda_consistency", 0.0)) > 0.0:
+        # TODO: add paired full/missing forward consistency once the training
+        # loop has a dedicated auxiliary-loss contract.
+        print("lambda_consistency is set, but consistency loss is not active yet.")
 
     model = model.to(hyp_params.device)
 
@@ -55,15 +60,11 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
         num_batches = hyp_params.n_train // hyp_params.batch_size
         is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
         use_dataparallel = hyp_params.use_cuda and torch.cuda.device_count() > 1
-        proc_total_loss, proc_task_loss, proc_rec_loss, proc_cos_loss, proc_size = (
-            0,
-            0,
+        proc_total_loss, proc_task_loss, proc_size = (
             0,
             0,
             0,
         )
-        lambda_rec = float(getattr(hyp_params, "lambda_rec", 0.1))
-        lambda_cos = float(getattr(hyp_params, "lambda_cos", 0.05))
         max_missing_prob = float(getattr(hyp_params, "max_missing_prob", 0.5))
         double_missing_prob = float(getattr(hyp_params, "double_missing_prob", 0.25))
         start_time = time.time()
@@ -91,26 +92,17 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                     max_missing_prob=max_missing_prob,
                     double_missing_prob=double_missing_prob,
                 )
-                aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
-                loss_dict = mm.prompt4mser_loss(
-                    outputs=aux_outputs,
-                    labels=eval_attr.view(-1),
-                    missing_mod=missing_mod,
-                    class_weights=None,
-                    lambda_rec=lambda_rec,
-                    lambda_cos=lambda_cos,
-                )
-                total_loss = loss_dict["loss"]
-                task_loss = loss_dict["loss_cls"]
-                rec_loss = loss_dict["loss_rec"]
-                cos_loss = loss_dict["loss_cos"]
             else:
                 missing_mod = missing_mod.to(hyp_params.device)
-                preds = net(text, audio, vision, missing_mod)
+
+            aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
+            preds = aux_outputs["logits"]
+            if is_classification_dataset:
+                preds = preds.view(-1, hyp_params.output_dim)
+                task_loss = criterion(preds, eval_attr.view(-1))
+            else:
                 task_loss = criterion(preds, eval_attr)
-                total_loss = task_loss
-                rec_loss = task_loss.new_tensor(0.0)
-                cos_loss = task_loss.new_tensor(0.0)
+            total_loss = task_loss
 
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), hyp_params.clip)
@@ -118,28 +110,21 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
             proc_total_loss += total_loss.item() * batch_size
             proc_task_loss += task_loss.item() * batch_size
-            proc_rec_loss += rec_loss.item() * batch_size
-            proc_cos_loss += cos_loss.item() * batch_size
             proc_size += batch_size
 
             if i_batch % hyp_params.log_interval == 0 and i_batch > 0:
                 avg_total_loss = proc_total_loss / proc_size
                 avg_task_loss = proc_task_loss / proc_size
-                avg_rec_loss = proc_rec_loss / proc_size
-                avg_cos_loss = proc_cos_loss / proc_size
                 elapsed_time = time.time() - start_time
                 if is_classification_dataset:
                     print(
                         "Epoch {:2d} | Batch {:3d}/{:3d} | Time/Batch(ms) {:5.2f} | "
-                        "Cls Loss {:5.4f} | Rec Loss {:5.4f} | Cos Loss {:5.4f} | "
-                        "Total Loss {:5.4f}".format(
+                        "Cls Loss {:5.4f} | Total Loss {:5.4f}".format(
                             epoch,
                             i_batch,
                             num_batches,
                             elapsed_time * 1000 / hyp_params.log_interval,
                             avg_task_loss,
-                            avg_rec_loss,
-                            avg_cos_loss,
                             avg_total_loss,
                         )
                     )
@@ -153,9 +138,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                             avg_total_loss,
                         )
                     )
-                proc_total_loss, proc_task_loss, proc_rec_loss, proc_cos_loss, proc_size = (
-                    0,
-                    0,
+                proc_total_loss, proc_task_loss, proc_size = (
                     0,
                     0,
                     0,

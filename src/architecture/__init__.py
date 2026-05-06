@@ -1,9 +1,11 @@
-from src.architecture import (
+from .dual_stream_prompt import (
     MissingModalityPromptBank,
     TextGuidedCrossAttentionPromptStream,
     DualStreamPromptLearningNetwork,
     missing_mod_to_availability_mask,
     apply_missing_modality_dropout,
+)
+from .prompt4mser import (
     PromptGenerator,
     ModalitySelfAttention,
     Prompt4MSER,

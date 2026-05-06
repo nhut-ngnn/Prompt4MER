@@ -145,14 +145,20 @@ def _normalize_state_dict_keys(state_dict):
 
 
 def _build_model_from_state_dict(state_dict, hyp_params):
-    state_keys = state_dict.keys()
+    state_keys = list(state_dict.keys())
+    has_dual_stream_weights = any(
+        key.startswith(("prompt_bank.", "cross_stream."))
+        for key in state_keys
+    )
     has_prompt_weights = any(
         key.startswith("generative_prompt") or key.startswith("missing_type_prompt")
         for key in state_keys
     )
-    if not has_prompt_weights:
-        print("Checkpoint does not expose prompt weights; instantiating Prompt4MSER anyway.")
-    model = mm.Prompt4MSER(hyp_params)
+
+    if has_prompt_weights and not has_dual_stream_weights:
+        model = mm.Prompt4MSER(hyp_params)
+    else:
+        model = mm.DualStreamPromptLearningNetwork(hyp_params)
     overlap = set(model.state_dict().keys()) & set(state_keys)
     if not overlap:
         raise ValueError(

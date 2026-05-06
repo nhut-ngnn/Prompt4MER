@@ -16,11 +16,13 @@ VIDEO_CKPT_PATH = os.getenv("VIDEO_CKPT_PATH", DEFAULT_VIDEO_CKPT)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-TOKENIZER = BertTokenizer.from_pretrained('bert-base-uncased')
+TEXT_MODEL_NAME = "bert-large-uncased"
+
+TOKENIZER = BertTokenizer.from_pretrained(TEXT_MODEL_NAME)
 AUDIO_PROCESSOR = AutoFeatureExtractor.from_pretrained("microsoft/wavlm-base")
 VIDEO_PROCESSOR = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-TEXT_MODEL = BERTEmbeddingModel(embedding_dim=768, projection_dim=512).to(device)
+TEXT_MODEL = BERTEmbeddingModel(model_name=TEXT_MODEL_NAME, projection_dim=512).to(device)
 AUDIO_MODEL = WavLMEmbeddingModel(embedding_dim=768, projection_dim=512).to(device)
 VIDEO_MODEL = CLIPVideoEmbeddingModel(embedding_dim=768, projection_dim=512).to(device)
 

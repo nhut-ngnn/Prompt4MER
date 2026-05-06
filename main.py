@@ -92,6 +92,24 @@ parser.add_argument(
 parser.add_argument("--prompt_dim", type=int, default=30)
 parser.add_argument("--prompt_length", type=int, default=16)
 parser.add_argument(
+    "--cross_attn_heads",
+    type=int,
+    default=0,
+    help="number of cross-attention heads for the dual-stream prompt model",
+)
+parser.add_argument(
+    "--prompt_dropout",
+    type=float,
+    default=0.0,
+    help="dropout applied to dual-stream prompt parameters",
+)
+parser.add_argument(
+    "--missing_modality_dropout",
+    type=float,
+    default=0.0,
+    help="training-time probability of dropping an available modality in the dual-stream model",
+)
+parser.add_argument(
     "--fusion_head_output_type",
     type=str,
     default="attn",
@@ -149,16 +167,10 @@ parser.add_argument(
     help="optional .pt path to save one prompted sample",
 )
 parser.add_argument(
-    "--lambda_rec",
+    "--lambda_consistency",
     type=float,
-    default=0.1,
-    help="weight for reconstruction loss in Prompt4MSER loss",
-)
-parser.add_argument(
-    "--lambda_cos",
-    type=float,
-    default=0.05,
-    help="weight for cosine loss in Prompt4MSER loss",
+    default=0.0,
+    help="optional consistency loss weight for dual-stream prompt training",
 )
 parser.add_argument(
     "--max_missing_prob",

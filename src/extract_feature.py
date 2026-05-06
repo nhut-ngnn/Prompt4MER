@@ -601,22 +601,22 @@ def main():
     dataset_cfg = {
         "iemocap": {
             "preprocessed_dir": "IEMOCAP_preprocessed",
-            "output_prefix": "IEMOCAP_BERT_WavLM_CLIP",
+            "output_prefix": "IEMOCAP_BERT_LARGE_WavLM_CLIP",
             "skip_text": False,
         },
         "mosi": {
             "preprocessed_dir": "MOSI_preprocessed",
-            "output_prefix": "CMU_MOSI_BERT_WavLM_CLIP",
+            "output_prefix": "CMU_MOSI_BERT_LARGE_WavLM_CLIP",
             "skip_text": False,
         },
         "sims": {
             "preprocessed_dir": "SIMS_preprocessed",
-            "output_prefix": "CH_SIMS_BERT_WavLM_CLIP",
+            "output_prefix": "CH_SIMS_BERT_LARGE_WavLM_CLIP",
             "skip_text": False,
         },
         "meld": {
             "preprocessed_dir": "MELD_preprocessed",
-            "output_prefix": "MELD_BERT_WavLM_CLIP",
+            "output_prefix": "MELD_BERT_LARGE_WavLM_CLIP",
             "skip_text": False,
         },
     }
