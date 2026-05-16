@@ -9,8 +9,6 @@ from src.eval_metrics import (
     eval_iemocap,
     eval_meld,
     eval_msp_improv,
-    eval_mosei_senti,
-    eval_mosi,
     eval_sims,
     get_metrics,
 )
@@ -301,11 +299,7 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
 
 
 def print_metrics(hyp_params, results, truths):
-    if hyp_params.dataset == "mosei":
-        eval_mosei_senti(results, truths, True)
-    elif hyp_params.dataset == "mosi":
-        eval_mosi(results, truths, True)
-    elif hyp_params.dataset == "iemocap":
+    if hyp_params.dataset == "iemocap":
         eval_iemocap(results, truths)
     elif hyp_params.dataset == "meld":
         eval_meld(results, truths)

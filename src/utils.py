@@ -2,7 +2,6 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.iemocap_feature_data import IEMOCAPFeatureData
-from src.mosidata import MOSIData
 from src.msp_improv_feature_data import MSPIMPROVFeatureData
 from src.simsdata import SIMSData
 
@@ -42,10 +41,10 @@ def get_data(args, split="train", full_data=False):
             a_type=getattr(args, "a_type", None),
             v_type=getattr(args, "v_type", None),
         )
-    elif args.dataset == "mosi" or args.dataset == "mosei":
-        data = MOSIData(args.data_path, split, full_data=full_data)
     elif args.dataset == "sims":
         data = SIMSData(args.data_path, split, full_data=full_data)
+    else:
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
     return data
 
 

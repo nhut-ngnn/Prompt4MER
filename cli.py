@@ -15,8 +15,6 @@ from src.utils import get_loader
 
 
 OUTPUT_DIMS = {
-    "mosi": 1,
-    "mosei": 1,
     "sims": 1,
     "iemocap": 4,
     "meld": 7,
@@ -52,8 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset",
         type=str,
-        default="mosi",
-        choices=["mosi", "mosei", "iemocap", "meld", "msp-improv", "sims"],
+        default="iemocap",
+        choices=["iemocap", "meld", "msp-improv", "sims"],
     )
     parser.add_argument("--data_path", type=str, default=None)
 

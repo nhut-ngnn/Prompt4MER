@@ -202,10 +202,6 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
             model, criterion, hyp_params, valid_loader, test_loader, test=False
         )
         skip_epoch_test_eval = getattr(hyp_params, "skip_epoch_test_eval", False)
-        skip_epoch_test_eval = skip_epoch_test_eval or (
-            hyp_params.dataset in {"mosi", "mosei"}
-            and not getattr(hyp_params, "eval_test_each_epoch", False)
-        )
         if skip_epoch_test_eval:
             test_loss = float("nan")
         else:

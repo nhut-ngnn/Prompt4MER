@@ -51,8 +51,9 @@ parser.add_argument(
 parser.add_argument(
     "--dataset",
     type=str,
-    default="mosi",
-    help="dataset to use (mosei, mosi, iemocap, meld, msp-improv, sims)",
+    default="iemocap",
+    choices=["iemocap", "meld", "msp-improv", "sims"],
+    help="dataset to use (iemocap, meld, msp-improv, sims)",
 )
 parser.add_argument(
     "--data_path",
@@ -228,7 +229,7 @@ args = parser.parse_args()
 dataset = str.lower(args.dataset.strip())
 args.dataset = dataset
 
-output_dim_dict = {"mosi": 1, "mosei": 1, "sims": 1, "iemocap": 4, "meld": 7, "msp-improv": 4}
+output_dim_dict = {"sims": 1, "iemocap": 4, "meld": 7, "msp-improv": 4}
 
 criterion_dict = {"iemocap": "CrossEntropyLoss", "meld": "CrossEntropyLoss", "msp-improv": "CrossEntropyLoss"}
 

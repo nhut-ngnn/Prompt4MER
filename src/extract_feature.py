@@ -32,10 +32,6 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".flv"}
 DATASET_ALIASES = {
     "iemocap": "iemocap",
     "IEMOCAP": "iemocap",
-    "mosi": "mosi",
-    "MOSI": "mosi",
-    "cmu-mosi": "mosi",
-    "CMU-MOSI": "mosi",
     "sims": "sims",
     "SIMS": "sims",
     "ch-sims": "sims",
@@ -606,11 +602,6 @@ def main():
         "iemocap": {
             "preprocessed_dir": "IEMOCAP_preprocessed",
             "output_prefix": "IEMOCAP_BERT_LARGE_WavLM_CLIP",
-            "skip_text": False,
-        },
-        "mosi": {
-            "preprocessed_dir": "MOSI_preprocessed",
-            "output_prefix": "CMU_MOSI_BERT_LARGE_WavLM_CLIP",
             "skip_text": False,
         },
         "sims": {

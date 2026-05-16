@@ -602,10 +602,6 @@ def _preprocess_from_metadata(args, dataset_name, output_subdir):
     logging.info("%s - Saved preprocessed data to %s", dataset_name, output_dir)
 
 
-def preprocess_mosi(args):
-    _preprocess_from_metadata(args, dataset_name="CMU-MOSI", output_subdir="MOSI_preprocessed")
-
-
 def preprocess_sims(args):
     _preprocess_from_metadata(args, dataset_name="CH-SIMS", output_subdir="SIMS_preprocessed")
 
@@ -699,7 +695,7 @@ def arg_parser():
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["iemocap", "mosi", "sims", "meld", "msp-improv"],
+        choices=["iemocap", "sims", "meld", "msp-improv"],
         required=True,
     )
     parser.add_argument(
@@ -712,7 +708,7 @@ def arg_parser():
         "--metadata_path",
         type=str,
         default=None,
-        help="Path to metadata file or directory (.csv/.jsonl/.json/.pkl) for MOSI/SIMS/MELD preprocessing",
+        help="Path to metadata file or directory (.csv/.jsonl/.json/.pkl) for SIMS/MELD preprocessing",
     )
     parser.add_argument(
         "--audio_root",
@@ -741,8 +737,6 @@ if __name__ == "__main__":
     args = arg_parser()
     if args.dataset == "iemocap":
         preprocess_iemocap(args)
-    elif args.dataset == "mosi":
-        preprocess_mosi(args)
     elif args.dataset == "sims":
         preprocess_sims(args)
     elif args.dataset == "meld":

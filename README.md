@@ -74,45 +74,6 @@ Results are written under `./results/iemocap_missing_ablation/`, with one CSV pe
 and `summary.csv` containing the one-seed result for each setting. Set `NUM_SEEDS=5` if you
 want the full five-seed mean/std run.
 
-Train CMU-MOSI from `/home/minhnhutngnn/data/cmu-mosi` with both stages:
-
-```bash
-scripts/train_cmu_mosi.sh
-```
-
-The script uses `aligned_50.pkl` from `/home/minhnhutngnn/data/cmu-mosi` by default and
-writes five per-seed pretrain and fine-tune checkpoints under `./checkpoints/`, for example
-`mosi_4mser_concat_pretrain.seed32.pt` and `mosi_4mser_concat_finetune.seed32.pt`.
-Fine-tune automatically loads the matching pretrain checkpoint for each seed. Run a single
-stage with `STAGE=pretrain` or `STAGE=finetune`. Override the paths with:
-
-```bash
-DATA_PATH=/home/minhnhutngnn/data/cmu-mosi \
-PRETRAIN_CHECKPOINT=./checkpoints/mosi_custom_pretrain.pt \
-FINETUNE_CHECKPOINT=./checkpoints/mosi_custom_finetune.pt \
-scripts/train_cmu_mosi.sh
-```
-
-Run CMU-MOSI missing-sampler ablation:
-
-```bash
-scripts/ablate_cmu_mosi_missing.sh
-```
-
-This mirrors the IEMOCAP ablation: one seed by default, `double_missing_prob=0.25`, and
-`max_missing_prob` from `0.0` to `1.0` with step `0.1`. Results are written under
-`./results/mosi_missing_ablation/`.
-
-Train and evaluate CMU-MOSEI from `/home/minhnhutngnn/data/cmu-mosei`:
-
-```bash
-scripts/train_cmu_mosei.sh
-scripts/eval_cmu_mosei.sh
-```
-
-The MOSEI scripts mirror CMU-MOSI: training runs pretrain and fine-tune by default over
-five seeds, and evaluation writes `./checkpoints/mosei_4mser_concat_finetune_eval.csv`.
-
 Prepare, train, and evaluate MSP-IMPROV from `/home/minhnhutngnn/MSP-IMPROV`:
 
 ```bash
