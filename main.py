@@ -1,5 +1,6 @@
 import random
 import os
+import csv
 
 import numpy as np
 import torch
@@ -42,10 +43,16 @@ parser.add_argument(
     help="comma-separated eval-only modality cases: a,t,v,at,av,tv,atv (or full/all)",
 )
 parser.add_argument(
+    "--eval_csv",
+    type=str,
+    default=None,
+    help="optional CSV path for eval-only per-seed and aggregate metrics",
+)
+parser.add_argument(
     "--dataset",
     type=str,
     default="mosi",
-    help="dataset to use (mosei, mosi, iemocap, meld, sims)",
+    help="dataset to use (mosei, mosi, iemocap, meld, msp-improv, sims)",
 )
 parser.add_argument(
     "--data_path",
@@ -136,10 +143,31 @@ parser.add_argument(
     "--batch_size", type=int, default=64, metavar="N", help="batch size"
 )
 parser.add_argument("--clip", type=float, default=0.8, help="gradient clip value")
-parser.add_argument("--lr", type=float, default=1e-3, help="initial learning rate")
-parser.add_argument("--optim", type=str, default="Adam", help="optimizer to use")
+parser.add_argument("--lr", type=float, default=5e-4, help="initial learning rate")
+parser.add_argument("--optim", type=str, default="AdamW", help="optimizer to use")
+parser.add_argument(
+    "--weight_decay",
+    type=float,
+    default=1e-4,
+    help="decoupled weight decay for AdamW-compatible optimizers",
+)
+parser.add_argument("--adam_beta1", type=float, default=0.9, help="Adam beta1")
+parser.add_argument("--adam_beta2", type=float, default=0.999, help="Adam beta2")
+parser.add_argument("--adam_eps", type=float, default=1e-8, help="Adam epsilon")
 parser.add_argument("--num_epochs", type=int, default=40, help="number of epochs")
-parser.add_argument("--when", type=int, default=10, help="when to decay learning rate")
+parser.add_argument("--when", type=int, default=5, help="LR scheduler patience")
+parser.add_argument(
+    "--scheduler_factor",
+    type=float,
+    default=0.5,
+    help="multiplicative LR decay factor on validation plateau",
+)
+parser.add_argument(
+    "--min_lr",
+    type=float,
+    default=1e-6,
+    help="minimum learning rate after scheduler decay",
+)
 
 
 # Logistics
@@ -149,11 +177,12 @@ parser.add_argument(
     default=30,
     help="frequency of result logging (default: 30)",
 )
-parser.add_argument("--seed", type=int, default=666, help="random seed")
-parser.add_argument("--num_seeds", type=int, default=1, help="number of seeds to run")
+parser.add_argument("--seed", type=int, default=32, help="random seed")
+parser.add_argument("--num_seeds", type=int, default=5, help="number of seeds to run")
 parser.add_argument("--seed_stride", type=int, default=1, help="increment between seeds")
 parser.add_argument("--no_cuda", action="store_true", help="do not use cuda")
 parser.add_argument("--gpu_id", type=int, default=0, help="CUDA device index to use")
+parser.add_argument("--use_dataparallel", action="store_true", help="enable multi-GPU DataParallel")
 parser.add_argument("--name", type=str, default=None, help="name of the trial")
 parser.add_argument(
     "--print_prompt_sample",
@@ -167,10 +196,19 @@ parser.add_argument(
     help="optional .pt path to save one prompted sample",
 )
 parser.add_argument(
-    "--lambda_consistency",
-    type=float,
-    default=0.0,
-    help="optional consistency loss weight for dual-stream prompt training",
+    "--skip_final_eval",
+    action="store_true",
+    help="skip reloading the best checkpoint for final train/valid/test summary after training",
+)
+parser.add_argument(
+    "--skip_epoch_test_eval",
+    action="store_true",
+    help="skip test-set evaluation after each training epoch",
+)
+parser.add_argument(
+    "--eval_test_each_epoch",
+    action="store_true",
+    help="force test-set evaluation after each training epoch",
 )
 parser.add_argument(
     "--max_missing_prob",
@@ -190,9 +228,9 @@ args = parser.parse_args()
 dataset = str.lower(args.dataset.strip())
 args.dataset = dataset
 
-output_dim_dict = {"mosi": 1, "mosei": 1, "sims": 1, "iemocap": 4, "meld": 7}
+output_dim_dict = {"mosi": 1, "mosei": 1, "sims": 1, "iemocap": 4, "meld": 7, "msp-improv": 4}
 
-criterion_dict = {"iemocap": "CrossEntropyLoss", "meld": "CrossEntropyLoss"}
+criterion_dict = {"iemocap": "CrossEntropyLoss", "meld": "CrossEntropyLoss", "msp-improv": "CrossEntropyLoss"}
 
 
 def setup_seed(seed):
@@ -259,17 +297,25 @@ def _collect_scalar_metrics(run_summaries):
     if not run_summaries:
         return {}
 
-    aggregated = {}
-    metric_groups = {
-        "valid_loss": [summary["valid_loss"] for summary in run_summaries],
-        "test_loss": [summary["test_loss"] for summary in run_summaries],
-    }
-    for split in ["valid_metrics", "test_metrics"]:
-        keys = run_summaries[0][split].keys()
-        for key in keys:
-            metric_groups[f"{split}.{key}"] = [summary[split][key] for summary in run_summaries]
+    def flatten_scalars(data, prefix=""):
+        scalars = {}
+        if isinstance(data, dict):
+            for key, value in data.items():
+                next_prefix = f"{prefix}.{key}" if prefix else str(key)
+                scalars.update(flatten_scalars(value, next_prefix))
+        elif isinstance(data, (int, float, np.floating)):
+            scalars[prefix] = float(data)
+        return scalars
 
+    metric_groups = {}
+    for summary in run_summaries:
+        for key, value in flatten_scalars(summary).items():
+            metric_groups.setdefault(key, []).append(value)
+
+    aggregated = {}
     for key, values in metric_groups.items():
+        if len(values) != len(run_summaries):
+            continue
         arr = np.asarray(values, dtype=np.float64)
         aggregated[key] = {
             "mean": float(arr.mean()),
@@ -279,18 +325,88 @@ def _collect_scalar_metrics(run_summaries):
     return aggregated
 
 
+def _flatten_scalars(data, prefix=""):
+    scalars = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            next_prefix = f"{prefix}.{key}" if prefix else str(key)
+            scalars.update(_flatten_scalars(value, next_prefix))
+    elif isinstance(data, (int, float, np.floating)):
+        scalars[prefix] = float(data)
+    return scalars
+
+
+def _write_eval_csv(path, run_summaries, aggregated, seeds):
+    metric_names = set()
+    rows = []
+
+    for seed, summary in zip(seeds, run_summaries):
+        for modality, values in summary.items():
+            flat_values = _flatten_scalars(values)
+            metric_names.update(flat_values.keys())
+            rows.append(
+                {
+                    "row_type": "seed",
+                    "seed": seed,
+                    "modality": modality,
+                    **flat_values,
+                }
+            )
+
+    for stat_name in ["mean", "std"]:
+        grouped = {}
+        for key, stats in aggregated.items():
+            modality, metric = key.split(".", 1) if "." in key else ("overall", key)
+            grouped.setdefault(modality, {})[metric] = stats[stat_name]
+            metric_names.add(metric)
+        for modality, values in grouped.items():
+            rows.append(
+                {
+                    "row_type": stat_name,
+                    "seed": "",
+                    "modality": modality,
+                    **values,
+                }
+            )
+
+    fieldnames = ["row_type", "seed", "modality"] + sorted(metric_names)
+    output_path = os.path.abspath(path)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(output_path, "w", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Saved eval CSV to {output_path}")
+
+
+def _default_eval_csv_path():
+    base_path = args.checkpoint or args.name or "eval_results"
+    root, _ = os.path.splitext(base_path)
+    return f"{root}_eval.csv"
+
+
 if __name__ == "__main__":
     seeds = [args.seed + i * args.seed_stride for i in range(args.num_seeds)]
+    base_name = args.name
+    base_checkpoint = args.checkpoint
+    base_pretrained_model = args.pretrained_model
+    eval_csv_path = args.eval_csv or (_default_eval_csv_path() if args.eval_only else None)
 
-    if args.eval_only or args.num_seeds == 1:
+    if args.num_seeds == 1:
         run_name = _seed_run_name(args.name, seeds[0]) if args.num_seeds > 1 else args.name
         hyp_params.seed = seeds[0]
         hyp_params.name = run_name
+        hyp_params.checkpoint = base_checkpoint
+        hyp_params.pretrained_model = base_pretrained_model
         setup_seed(hyp_params.seed)
-        train.initiate(hyp_params, trainloder, validloder, testloder)
+        summary = train.initiate(hyp_params, trainloder, validloder, testloder)
+        if eval_csv_path is not None:
+            aggregated = _collect_scalar_metrics([summary])
+            _write_eval_csv(eval_csv_path, [summary], aggregated, seeds)
     else:
         run_summaries = []
-        base_name = args.name
         for run_idx, seed in enumerate(seeds, start=1):
             print("=" * 60)
             print(f"Seed run {run_idx}/{len(seeds)} | seed={seed}")
@@ -298,6 +414,8 @@ if __name__ == "__main__":
             setup_seed(seed)
             hyp_params.seed = seed
             hyp_params.name = _seed_run_name(base_name, seed)
+            hyp_params.checkpoint = _seed_run_name(base_checkpoint, seed)
+            hyp_params.pretrained_model = _seed_run_name(base_pretrained_model, seed)
             summary = train.initiate(hyp_params, trainloder, validloder, testloder)
             run_summaries.append(summary)
 
@@ -309,3 +427,5 @@ if __name__ == "__main__":
             print(
                 f"{key}: mean={stats['mean']:.6f} std={stats['std']:.6f} values={stats['values']}"
             )
+        if eval_csv_path is not None:
+            _write_eval_csv(eval_csv_path, run_summaries, aggregated, seeds)

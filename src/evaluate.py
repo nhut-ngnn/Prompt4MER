@@ -5,7 +5,15 @@ import torch.nn.functional as F
 from torch import nn
 
 from src import model as mm
-from src.eval_metrics import eval_iemocap, eval_meld, eval_mosei_senti, eval_mosi, eval_sims
+from src.eval_metrics import (
+    eval_iemocap,
+    eval_meld,
+    eval_msp_improv,
+    eval_mosei_senti,
+    eval_mosi,
+    eval_sims,
+    get_metrics,
+)
 
 
 EVAL_MODALITY_TO_MISSING_MODE = {
@@ -241,8 +249,12 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
     supports_prompt_missing = hasattr(base_model, "get_complete_data") and hasattr(
         base_model, "missing_type_prompt"
     )
-    is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
-    use_dataparallel = hyp_params.use_cuda and torch.cuda.device_count() > 1
+    is_classification_dataset = hyp_params.dataset in {
+        "iemocap",
+        "meld",
+        "msp-improv",
+    }
+    use_dataparallel = bool(getattr(hyp_params, "use_dataparallel", False))
 
     loader = test_loader if test else valid_loader
     total_loss = 0.0
@@ -252,13 +264,14 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
     with torch.no_grad():
         for batch_X, batch_Y, missing_mod in loader:
             text, audio, vision = batch_X
-            eval_attr = batch_Y.squeeze(dim=-1)
+            eval_attr = batch_Y
 
             text = text.to(hyp_params.device)
             audio = audio.to(hyp_params.device)
             vision = vision.to(hyp_params.device)
             eval_attr = eval_attr.to(hyp_params.device)
             if is_classification_dataset:
+                eval_attr = eval_attr.squeeze(dim=-1)
                 eval_attr = eval_attr.long()
             missing_mod = missing_mod.to(hyp_params.device)
 
@@ -274,10 +287,12 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
             if is_classification_dataset:
                 preds = preds.view(-1, hyp_params.output_dim)
                 eval_attr = eval_attr.view(-1)
+            else:
+                eval_attr = eval_attr.view_as(preds)
 
             total_loss += criterion(preds, eval_attr).item() * batch_size
-            results.append(preds)
-            truths.append(eval_attr)
+            results.append(preds.detach().cpu())
+            truths.append(eval_attr.detach().cpu())
 
     avg_loss = total_loss / (hyp_params.n_test if test else hyp_params.n_valid)
     results = torch.cat(results)
@@ -294,6 +309,8 @@ def print_metrics(hyp_params, results, truths):
         eval_iemocap(results, truths)
     elif hyp_params.dataset == "meld":
         eval_meld(results, truths)
+    elif hyp_params.dataset == "msp-improv":
+        eval_msp_improv(results, truths)
     elif hyp_params.dataset == "sims":
         eval_sims(results, truths)
 
@@ -337,11 +354,17 @@ def evaluate_only(hyp_params, valid_loader, test_loader):
                 hyp_params,
                 f"{split_name.title()} prompted sample",
             )
-            return
+            return {
+                "complete": {
+                    "loss": float(eval_loss),
+                    "metrics": get_metrics(hyp_params.dataset, results, truths),
+                }
+            }
         finally:
             set_fixed_missing_mode(valid_loader, None)
             set_fixed_missing_mode(test_loader, None)
 
+    summaries = {}
     try:
         for modality in requested_modalities:
             missing_mode = EVAL_MODALITY_TO_MISSING_MODE[modality]
@@ -362,6 +385,11 @@ def evaluate_only(hyp_params, valid_loader, test_loader):
                 hyp_params,
                 f"{split_name.title()} prompted sample ({modality})",
             )
+            summaries[modality] = {
+                "loss": float(eval_loss),
+                "metrics": get_metrics(hyp_params.dataset, results, truths),
+            }
     finally:
         set_fixed_missing_mode(valid_loader, None)
         set_fixed_missing_mode(test_loader, None)
+    return summaries

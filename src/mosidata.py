@@ -6,7 +6,13 @@ import torch
 
 
 class MOSIData(Dataset):
-    DEFAULT_FILENAMES = ("mosi_data.pkl", "mosi_raw.pkl")
+    DEFAULT_FILENAMES = (
+        "mosi_data.pkl",
+        "mosi_raw.pkl",
+        "aligned_50.pkl",
+        "unaligned_50.pkl",
+        "Copy of aligned_50.pkl",
+    )
 
     def __init__(self, dataset_path, split_type="train", full_data=False):
         super(MOSIData, self).__init__()
@@ -18,12 +24,18 @@ class MOSIData(Dataset):
                 f"Split '{split_type}' was not found in {dataset_path}. "
                 f"Available splits: {sorted(dataset.keys())}"
             )
-        for key in ["text", "audio", "vision", "labels"]:
+        for key in ["text", "audio", "vision"]:
             if key not in dataset[split_type]:
                 raise KeyError(
                     f"Required key '{key}' was not found in split '{split_type}' "
                     f"from {dataset_path}"
                 )
+        label_key = "labels" if "labels" in dataset[split_type] else "regression_labels"
+        if label_key not in dataset[split_type]:
+            raise KeyError(
+                f"Required label key 'labels' or 'regression_labels' was not found "
+                f"in split '{split_type}' from {dataset_path}"
+            )
 
         self.vision = (
             torch.tensor(dataset[split_type]["vision"].astype(np.float32))
@@ -36,11 +48,10 @@ class MOSIData(Dataset):
         self.audio = dataset[split_type]["audio"].astype(np.float32)
         self.audio[self.audio == -np.inf] = 0
         self.audio = torch.tensor(self.audio).cpu().detach()
-        self.labels = (
-            torch.tensor(dataset[split_type]["labels"].astype(np.float32))
-            .cpu()
-            .detach()
-        )
+        labels = dataset[split_type][label_key].astype(np.float32)
+        if labels.ndim == 1:
+            labels = labels.reshape(-1, 1)
+        self.labels = torch.tensor(labels).cpu().detach()
 
         self.full_data = full_data
         self.fixed_missing_mode = None

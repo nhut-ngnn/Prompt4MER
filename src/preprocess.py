@@ -6,6 +6,7 @@ import logging
 import os
 import pickle
 import random
+import re
 from collections import Counter
 
 import numpy as np
@@ -26,6 +27,12 @@ LABEL_MAP_4 = {
     "sad": 2,
     "neu": 3,
     "exc": 1,
+}
+MSP_IMPROV_LABEL_MAP = {
+    "A": 0,
+    "H": 1,
+    "S": 2,
+    "N": 3,
 }
 
 VIDEO_FILE_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".flv")
@@ -607,19 +614,99 @@ def preprocess_meld(args):
     _preprocess_from_metadata(args, dataset_name="MELD", output_subdir="MELD_preprocessed")
 
 
+def _read_msp_improv_transcript(transcript_path):
+    if not os.path.isfile(transcript_path):
+        return ""
+    with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = [line.strip() for line in f if line.strip()]
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return lines[0]
+    return " ".join(lines)
+
+
+def _msp_improv_label_from_sample_id(sample_id):
+    match = re.match(r"MSP-IMPROV-S\d+([AHNS])-", sample_id)
+    if match is None:
+        return None
+    return MSP_IMPROV_LABEL_MAP.get(match.group(1))
+
+
+def preprocess_msp_improv(args):
+    if not args.data_root:
+        raise ValueError("--data_root is required for MSP-IMPROV preprocessing.")
+
+    audio_root = args.audio_root or os.path.join(args.data_root, "Audio")
+    transcript_root = os.path.join(
+        args.data_root,
+        "Human_transcriptions",
+        "All_human_transcriptions",
+    )
+    wav_files = sorted(glob.glob(os.path.join(audio_root, "**", "*.wav"), recursive=True))
+    samples = []
+
+    for wav_path in tqdm.tqdm(wav_files, desc="Processing MSP-IMPROV"):
+        sample_id = os.path.splitext(os.path.basename(wav_path))[0]
+        label = _msp_improv_label_from_sample_id(sample_id)
+        if label is None:
+            logging.warning("Skipped MSP-IMPROV sample with unknown label: %s", sample_id)
+            continue
+
+        try:
+            wav_data, _ = sf.read(wav_path, dtype="int16")
+        except Exception:
+            logging.warning("Cannot read %s", wav_path)
+            continue
+
+        if len(wav_data) < args.ignore_length:
+            logging.warning("Ignored short sample: %s", wav_path)
+            continue
+
+        transcript_path = os.path.join(transcript_root, f"{sample_id}.txt")
+        text = _read_msp_improv_transcript(transcript_path)
+        samples.append(
+            _build_sample(
+                sample_id=sample_id,
+                audio_path=wav_path,
+                text=text,
+                label=label,
+                video_path=None,
+            )
+        )
+
+    if not samples:
+        raise ValueError("No MSP-IMPROV samples found. Check --data_root and dataset structure.")
+
+    random.Random(args.seed).shuffle(samples)
+    labels = [sample["emotion"] for sample in samples]
+    train_samples, val_samples, test_samples = _split_train_val_test(samples, labels, args.seed)
+
+    output_dir = os.path.join(args.output_root, "MSP_IMPROV_preprocessed")
+    _save_splits(output_dir, train_samples, val_samples, test_samples)
+
+    logging.info(
+        "MSP-IMPROV - Train: %d | Val: %d | Test: %d",
+        len(train_samples),
+        len(val_samples),
+        len(test_samples),
+    )
+    logging.info("MSP-IMPROV - Saved preprocessed data to %s", output_dir)
+
+
 def arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["iemocap", "mosi", "sims", "meld"],
+        choices=["iemocap", "mosi", "sims", "meld", "msp-improv"],
         required=True,
     )
     parser.add_argument(
         "--data_root",
         type=str,
         default=None,
-        help="Root path of raw IEMOCAP data (required when --dataset iemocap)",
+        help="Root path of raw data (required for IEMOCAP/MSP-IMPROV preprocessing)",
     )
     parser.add_argument(
         "--metadata_path",
@@ -660,3 +747,5 @@ if __name__ == "__main__":
         preprocess_sims(args)
     elif args.dataset == "meld":
         preprocess_meld(args)
+    elif args.dataset == "msp-improv":
+        preprocess_msp_improv(args)

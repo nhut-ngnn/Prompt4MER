@@ -17,6 +17,52 @@ from src.evaluate import (
 from src.utils import transfer_model
 
 
+def _build_optimizer(model, hyp_params):
+    optim_name = hyp_params.optim
+    optimizer_cls = getattr(optim, optim_name)
+    weight_decay = float(getattr(hyp_params, "weight_decay", 0.0))
+    optimizer_kwargs = {
+        "lr": hyp_params.lr,
+        "betas": (
+            float(getattr(hyp_params, "adam_beta1", 0.9)),
+            float(getattr(hyp_params, "adam_beta2", 0.999)),
+        ),
+        "eps": float(getattr(hyp_params, "adam_eps", 1e-8)),
+    }
+
+    if weight_decay > 0.0:
+        decay_params = []
+        no_decay_params = []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            lower_name = name.lower()
+            if (
+                param.ndim == 1
+                or name.endswith(".bias")
+                or "norm" in lower_name
+                or "prompt" in lower_name
+            ):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+        param_groups = []
+        if decay_params:
+            param_groups.append({"params": decay_params, "weight_decay": weight_decay})
+        if no_decay_params:
+            param_groups.append({"params": no_decay_params, "weight_decay": 0.0})
+    else:
+        param_groups = model.parameters()
+        optimizer_kwargs["weight_decay"] = 0.0
+
+    try:
+        return optimizer_cls(param_groups, **optimizer_kwargs)
+    except TypeError:
+        optimizer_kwargs.pop("betas", None)
+        optimizer_kwargs.pop("eps", None)
+        return optimizer_cls(param_groups, **optimizer_kwargs)
+
+
 def initiate(hyp_params, train_loader, valid_loader, test_loader):
     if hyp_params.eval_only:
         return evaluate_only(hyp_params, valid_loader, test_loader)
@@ -27,18 +73,17 @@ def initiate(hyp_params, train_loader, valid_loader, test_loader):
     else:
         model = mm.DualStreamPromptLearningNetwork(hyp_params)
 
-    if float(getattr(hyp_params, "lambda_consistency", 0.0)) > 0.0:
-        # TODO: add paired full/missing forward consistency once the training
-        # loop has a dedicated auxiliary-loss contract.
-        print("lambda_consistency is set, but consistency loss is not active yet.")
-
     model = model.to(hyp_params.device)
 
-    optimizer = getattr(optim, hyp_params.optim)(model.parameters(), lr=hyp_params.lr)
+    optimizer = _build_optimizer(model, hyp_params)
     criterion = getattr(nn, hyp_params.criterion)()
 
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", patience=hyp_params.when, factor=0.1
+        optimizer,
+        mode="min",
+        patience=hyp_params.when,
+        factor=float(getattr(hyp_params, "scheduler_factor", 0.5)),
+        min_lr=float(getattr(hyp_params, "min_lr", 1e-6)),
     )
     settings = {
         "model": model,
@@ -58,8 +103,12 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
     def train_epoch(model, optimizer, criterion, epoch):
         model.train()
         num_batches = hyp_params.n_train // hyp_params.batch_size
-        is_classification_dataset = hyp_params.dataset in {"iemocap", "meld"}
-        use_dataparallel = hyp_params.use_cuda and torch.cuda.device_count() > 1
+        is_classification_dataset = hyp_params.dataset in {
+            "iemocap",
+            "meld",
+            "msp-improv",
+        }
+        use_dataparallel = bool(getattr(hyp_params, "use_dataparallel", False))
         proc_total_loss, proc_task_loss, proc_size = (
             0,
             0,
@@ -71,7 +120,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
         for i_batch, (batch_X, batch_Y, missing_mod) in enumerate(train_loader):
             text, audio, vision = batch_X
-            eval_attr = batch_Y.squeeze(-1)
+            eval_attr = batch_Y
             model.zero_grad()
 
             text = text.to(hyp_params.device)
@@ -79,21 +128,19 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
             vision = vision.to(hyp_params.device)
             eval_attr = eval_attr.to(hyp_params.device)
             if is_classification_dataset:
+                eval_attr = eval_attr.squeeze(-1)
                 eval_attr = eval_attr.long()
 
             batch_size = text.size(0)
             net = nn.DataParallel(model) if use_dataparallel and batch_size > 10 else model
-            if is_classification_dataset:
-                missing_mod = mm.sample_missing_mod(
-                    batch_size=batch_size,
-                    device=hyp_params.device,
-                    epoch=epoch,
-                    max_epoch=hyp_params.num_epochs,
-                    max_missing_prob=max_missing_prob,
-                    double_missing_prob=double_missing_prob,
-                )
-            else:
-                missing_mod = missing_mod.to(hyp_params.device)
+            missing_mod = mm.sample_missing_mod(
+                batch_size=batch_size,
+                device=hyp_params.device,
+                epoch=epoch,
+                max_epoch=hyp_params.num_epochs,
+                max_missing_prob=max_missing_prob,
+                double_missing_prob=double_missing_prob,
+            )
 
             aux_outputs = net(text, audio, vision, missing_mod, return_aux=True)
             preds = aux_outputs["logits"]
@@ -101,6 +148,7 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                 preds = preds.view(-1, hyp_params.output_dim)
                 task_loss = criterion(preds, eval_attr.view(-1))
             else:
+                eval_attr = eval_attr.view_as(preds)
                 task_loss = criterion(preds, eval_attr)
             total_loss = task_loss
 
@@ -146,15 +194,24 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
                 start_time = time.time()
 
     best_valid = 1e8
+    best_test_at_valid = None
     for epoch in range(1, hyp_params.num_epochs + 1):
         start = time.time()
         train_epoch(model, optimizer, criterion, epoch)
         val_loss, _, _ = evaluate_split(
             model, criterion, hyp_params, valid_loader, test_loader, test=False
         )
-        test_loss, _, _ = evaluate_split(
-            model, criterion, hyp_params, valid_loader, test_loader, test=True
+        skip_epoch_test_eval = getattr(hyp_params, "skip_epoch_test_eval", False)
+        skip_epoch_test_eval = skip_epoch_test_eval or (
+            hyp_params.dataset in {"mosi", "mosei"}
+            and not getattr(hyp_params, "eval_test_each_epoch", False)
         )
+        if skip_epoch_test_eval:
+            test_loss = float("nan")
+        else:
+            test_loss, _, _ = evaluate_split(
+                model, criterion, hyp_params, valid_loader, test_loader, test=True
+            )
 
         end = time.time()
         duration = end - start
@@ -170,8 +227,24 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
 
         if val_loss < best_valid:
             print(f"Saved model at {hyp_params.name}")
-            torch.save(model, hyp_params.name)
+            torch.save({"model_state_dict": model.state_dict()}, hyp_params.name)
             best_valid = val_loss
+            best_test_at_valid = None if test_loss != test_loss else test_loss
+
+    if getattr(hyp_params, "skip_final_eval", False):
+        del model
+        if hyp_params.use_cuda:
+            torch.cuda.empty_cache()
+        return {
+            "valid_loss": float(best_valid),
+            "test_loss": float(best_test_at_valid) if best_test_at_valid is not None else None,
+            "valid_metrics": {},
+            "test_metrics": {},
+        }
+
+    del model
+    if hyp_params.use_cuda:
+        torch.cuda.empty_cache()
 
     model = load_model(hyp_params.name, hyp_params)
     best_valid_loss, valid_results, valid_truths = evaluate_split(

@@ -113,7 +113,7 @@ def eval_iemocap(results, truths):
     print("  - Accuracy: ", metrics["acc"])
 
 
-def get_iemocap_metrics(results, truths):
+def get_four_class_metrics(results, truths):
     test_preds = results.view(-1, 4).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
 
@@ -122,6 +122,20 @@ def get_iemocap_metrics(results, truths):
     f1 = f1_score(test_truth_i, test_preds_i, average='weighted')
     acc = accuracy_score(test_truth_i, test_preds_i)
     return {"f1": float(f1), "acc": float(acc)}
+
+
+def get_iemocap_metrics(results, truths):
+    return get_four_class_metrics(results, truths)
+
+
+def eval_msp_improv(results, truths):
+    metrics = get_msp_improv_metrics(results, truths)
+    print("  - F1 Score: ", metrics["f1"])
+    print("  - Accuracy: ", metrics["acc"])
+
+
+def get_msp_improv_metrics(results, truths):
+    return get_four_class_metrics(results, truths)
 
 
 def eval_meld(results, truths):
@@ -185,6 +199,8 @@ def get_metrics(dataset, results, truths):
         return get_iemocap_metrics(results, truths)
     if dataset == "meld":
         return get_meld_metrics(results, truths)
+    if dataset == "msp-improv":
+        return get_msp_improv_metrics(results, truths)
     if dataset == "sims":
         return get_sims_metrics(results, truths)
     return {}

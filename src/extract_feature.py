@@ -42,6 +42,10 @@ DATASET_ALIASES = {
     "CH-SIMS": "sims",
     "meld": "meld",
     "MELD": "meld",
+    "msp-improv": "msp-improv",
+    "MSP-IMPROV": "msp-improv",
+    "msp_improv": "msp-improv",
+    "MSP_IMPROV": "msp-improv",
 }
 
 
@@ -617,6 +621,11 @@ def main():
         "meld": {
             "preprocessed_dir": "MELD_preprocessed",
             "output_prefix": "MELD_BERT_LARGE_WavLM_CLIP",
+            "skip_text": False,
+        },
+        "msp-improv": {
+            "preprocessed_dir": "MSP_IMPROV_preprocessed",
+            "output_prefix": "MSP_IMPROV_BERT_LARGE_WavLM_CLIP",
             "skip_text": False,
         },
     }

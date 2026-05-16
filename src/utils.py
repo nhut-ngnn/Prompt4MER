@@ -3,6 +3,7 @@ from torch.utils.data import DataLoader
 
 from src.iemocap_feature_data import IEMOCAPFeatureData
 from src.mosidata import MOSIData
+from src.msp_improv_feature_data import MSPIMPROVFeatureData
 from src.simsdata import SIMSData
 
 
@@ -32,6 +33,15 @@ def get_data(args, split="train", full_data=False):
             a_type=getattr(args, "a_type", None),
             v_type=getattr(args, "v_type", None),
         )
+    elif args.dataset == "msp-improv":
+        data = MSPIMPROVFeatureData(
+            data_path=args.data_path,
+            split_type=split,
+            full_data=full_data,
+            l_type=getattr(args, "l_type", None),
+            a_type=getattr(args, "a_type", None),
+            v_type=getattr(args, "v_type", None),
+        )
     elif args.dataset == "mosi" or args.dataset == "mosei":
         data = MOSIData(args.data_path, split, full_data=full_data)
     elif args.dataset == "sims":
@@ -44,7 +54,7 @@ def get_loader(args):
     n_nums = []
     orig_dims = None
     seq_len = None
-    if args.dataset in {"iemocap", "meld"}:
+    if args.dataset in {"iemocap", "meld", "msp-improv"}:
         for split in ["train", "valid", "test"]:
             dataset = get_data(args, split, full_data=(split != "train"))
             dataloaders[split] = DataLoader(
