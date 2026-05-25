@@ -75,6 +75,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt_dropout", type=float, default=0.0)
     parser.add_argument("--missing_modality_dropout", type=float, default=0.0)
     parser.add_argument(
+        "--module_ablation",
+        type=str,
+        default="full",
+        choices=[
+            "full",
+            "no_prompt_bank",
+            "no_missing_prompt",
+            "no_modality_prompt",
+        ],
+        help="dual-stream module ablation variant",
+    )
+    parser.add_argument(
         "--fusion_head_output_type",
         type=str,
         default="attn",
