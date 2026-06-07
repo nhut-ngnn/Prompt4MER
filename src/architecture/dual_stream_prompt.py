@@ -117,7 +117,6 @@ class MissingModalityPromptBank(nn.Module):
         audio_feat: torch.Tensor,
         visual_feat: torch.Tensor,
         missing_mask: torch.Tensor,
-        ablation_mode: str = "full",
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         if text_feat.dim() != 2 or audio_feat.dim() != 2 or visual_feat.dim() != 2:
             raise ValueError("PromptBank expects modality features with shape [B, D].")
@@ -138,18 +137,8 @@ class MissingModalityPromptBank(nn.Module):
 
         modality_prompt = self.dropout(self.modality_prompts).unsqueeze(0)
         missing_prompt = self.dropout(self.missing_prompts).unsqueeze(0)
-        ablation_mode = str(ablation_mode).strip().lower()
-        if ablation_mode in {"none", "full", "prompt4mser"}:
-            observed = raw_modalities + modality_prompt
-            missing = missing_prompt + modality_prompt
-        elif ablation_mode in {"no_missing_prompt", "without_missing_prompt"}:
-            observed = raw_modalities + modality_prompt
-            missing = modality_prompt.expand_as(raw_modalities)
-        elif ablation_mode in {"no_modality_prompt", "without_modality_prompt"}:
-            observed = raw_modalities
-            missing = missing_prompt.expand_as(raw_modalities)
-        else:
-            raise ValueError(f"Unsupported prompt-bank ablation mode: {ablation_mode}")
+        observed = raw_modalities + modality_prompt
+        missing = missing_prompt + modality_prompt
 
         processed = available * observed + (1.0 - available) * missing
 
@@ -236,7 +225,6 @@ class DualStreamPromptLearningNetwork(nn.Module):
         self.missing_modality_dropout = float(
             getattr(hyp_params, "missing_modality_dropout", 0.0)
         )
-        self.module_ablation = str(getattr(hyp_params, "module_ablation", "full")).strip().lower()
 
         requested_heads = int(getattr(hyp_params, "cross_attn_heads", 0))
         if requested_heads <= 0:
@@ -331,25 +319,12 @@ class DualStreamPromptLearningNetwork(nn.Module):
             device=device,
         )
 
-        if self.module_ablation in {"no_prompt_bank", "without_prompt_bank"}:
-            raw_modalities = torch.stack([text_feat, audio_feat, visual_feat], dim=1)
-            modality_nodes = raw_modalities * missing_mask.to(
-                device=device,
-                dtype=raw_modalities.dtype,
-            ).unsqueeze(-1)
-            processed_modalities = {
-                "text": modality_nodes[:, 0, :],
-                "audio": modality_nodes[:, 1, :],
-                "visual": modality_nodes[:, 2, :],
-            }
-        else:
-            modality_nodes, processed_modalities = self.prompt_bank(
-                text_feat,
-                audio_feat,
-                visual_feat,
-                missing_mask,
-                ablation_mode=self.module_ablation,
-            )
+        modality_nodes, processed_modalities = self.prompt_bank(
+            text_feat,
+            audio_feat,
+            visual_feat,
+            missing_mask,
+        )
         z_cross, cross_attn_weights = self.cross_stream(modality_nodes)
         logits = self.classifier(z_cross)
 

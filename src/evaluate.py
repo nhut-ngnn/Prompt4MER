@@ -7,9 +7,7 @@ from torch import nn
 from src import model as mm
 from src.eval_metrics import (
     eval_iemocap,
-    eval_meld,
     eval_msp_improv,
-    eval_sims,
     get_metrics,
 )
 
@@ -249,7 +247,6 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
     )
     is_classification_dataset = hyp_params.dataset in {
         "iemocap",
-        "meld",
         "msp-improv",
     }
     use_dataparallel = bool(getattr(hyp_params, "use_dataparallel", False))
@@ -301,12 +298,8 @@ def evaluate_split(model, criterion, hyp_params, valid_loader, test_loader, test
 def print_metrics(hyp_params, results, truths):
     if hyp_params.dataset == "iemocap":
         eval_iemocap(results, truths)
-    elif hyp_params.dataset == "meld":
-        eval_meld(results, truths)
     elif hyp_params.dataset == "msp-improv":
         eval_msp_improv(results, truths)
-    elif hyp_params.dataset == "sims":
-        eval_sims(results, truths)
 
 
 def evaluate_only(hyp_params, valid_loader, test_loader):

@@ -1,30 +1,12 @@
 import torch
 from torch.utils.data import DataLoader
 
-from src.iemocap_feature_data import IEMOCAPFeatureData
-from src.msp_improv_feature_data import MSPIMPROVFeatureData
-from src.simsdata import SIMSData
+from src.data import IEMOCAPFeatureData, MSPIMPROVFeatureData
 
 
 def get_data(args, split="train", full_data=False):
     if args.dataset == "iemocap":
         data = IEMOCAPFeatureData(
-            data_path=args.data_path,
-            split_type=split,
-            full_data=full_data,
-            l_type=getattr(args, "l_type", None),
-            a_type=getattr(args, "a_type", None),
-            v_type=getattr(args, "v_type", None),
-        )
-    elif args.dataset == "meld":
-        try:
-            from src.meld_feature_data import MELDFeatureData
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError(
-                "MELD dataset support requires src/meld_feature_data.py. "
-                "That file is not present in the current worktree."
-            ) from exc
-        data = MELDFeatureData(
             data_path=args.data_path,
             split_type=split,
             full_data=full_data,
@@ -41,8 +23,6 @@ def get_data(args, split="train", full_data=False):
             a_type=getattr(args, "a_type", None),
             v_type=getattr(args, "v_type", None),
         )
-    elif args.dataset == "sims":
-        data = SIMSData(args.data_path, split, full_data=full_data)
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset}")
     return data
@@ -53,37 +33,23 @@ def get_loader(args):
     n_nums = []
     orig_dims = None
     seq_len = None
-    if args.dataset in {"iemocap", "meld", "msp-improv"}:
-        for split in ["train", "valid", "test"]:
-            dataset = get_data(args, split, full_data=(split != "train"))
-            dataloaders[split] = DataLoader(
-                dataset,
-                batch_size=args.batch_size,
-                drop_last=False,
-                collate_fn=dataset.collate_fn,
-            )
-            current_dims = dataset.get_dim()
-            current_seq_len = dataset.get_seq_len()
-            orig_dims = current_dims if orig_dims is None else orig_dims
-            n_nums.append(len(dataset))
-            seq_len = (
-                current_seq_len
-                if seq_len is None
-                else tuple(max(a, b) for a, b in zip(seq_len, current_seq_len))
-            )
-    else:
-        for split in ["train", "valid", "test"]:
-            dataset = get_data(args, split, full_data=(split != "train"))
-            dataloaders[split] = DataLoader(dataset, batch_size=args.batch_size)
-            current_dims = dataset.get_dim()
-            current_seq_len = dataset.get_seq_len()
-            orig_dims = current_dims if orig_dims is None else orig_dims
-            n_nums.append(len(dataset))
-            seq_len = (
-                current_seq_len
-                if seq_len is None
-                else tuple(max(a, b) for a, b in zip(seq_len, current_seq_len))
-            )
+    for split in ["train", "valid", "test"]:
+        dataset = get_data(args, split, full_data=(split != "train"))
+        dataloaders[split] = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            drop_last=False,
+            collate_fn=dataset.collate_fn,
+        )
+        current_dims = dataset.get_dim()
+        current_seq_len = dataset.get_seq_len()
+        orig_dims = current_dims if orig_dims is None else orig_dims
+        n_nums.append(len(dataset))
+        seq_len = (
+            current_seq_len
+            if seq_len is None
+            else tuple(max(a, b) for a, b in zip(seq_len, current_seq_len))
+        )
     return dataloaders, orig_dims, n_nums, seq_len
 
 

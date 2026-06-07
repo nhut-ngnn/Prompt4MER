@@ -1,13 +1,112 @@
-## Prompt-Guided Missing Modality Completion for Multimodal Emotion Recognition
+# Prompt4MER: Prompt-Guided Missing Modality Completion for Multimodal Emotion Recognition
 
-### CLI Examples
+> Official code repository for the manuscript 
+  <b>"Prompt-Guided Missing Modality Completion for Multimodal Emotion Recognition"</b>, submitted to <a href="https://www.ieice.org/cs/icm/apnoms/2026/index.html">The 25th Asia-Pacific Network Operations and Management Symposium</a>.
 
-Run these commands from the repository root.
+> Please press ⭐ button and/or cite papers if you feel helpful.
 
-Pretrain:
+<div align="center">
+
+[![python](https://img.shields.io/badge/-Python_3.8.20-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![pytorch](https://img.shields.io/badge/Torch_2.0.1-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
+[![cuda](https://img.shields.io/badge/-CUDA_11.8-green?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit-archive)
+</div>
+
+<p align="center">
+<img src="https://img.shields.io/badge/Last%20updated%20on-21.04.2026-brightgreen?style=for-the-badge">
+<img src="https://img.shields.io/badge/Written%20by-Nguyen%20Minh%20Nhut-pink?style=for-the-badge"> 
+</p>
+
+<div align="center">
+
+[**Introduction**](#introduciton) •
+[**Repository Layout**](#repository-layout) •
+[**Setup**](#setup) •
+[**Data Preparation**](#data-preparation) •
+[**Training**](#training) •
+[**Evaluation**](#evaluation) •
+[**Notes**](#notes)
+
+</div>
+
+## Introduciton
+
+Prompt4MER is a prompt-guided model for multimodal emotion recognition under missing-modality conditions. The model uses audio, text, and visual features, then improves robustness with:
+
+- **LMMP**: learnable modality prompts for observed inputs and missing prompts for unavailable modalities.
+- **Text-guided cross-modal fusion**: text acts as the semantic guide to attend over audio and visual representations.
+- **Two-stage training**: full-modality pretraining first, then missing-modality fine-tuning with random modality masks.
+
+This codebase currently supports the two main datasets used in the study: **IEMOCAP** and **MSP-IMPROV**. Both are treated as 4-class emotion recognition datasets: `angry`, `happy`, `sad`, `neutral`.
+
+## Repository Layout
+
+```text
+main.py                         # train / evaluate Prompt4MER
+cli.py                          # helper CLI entry
+src/architecture/               # Prompt4MER architecture
+src/data/                       # feature dataset loaders
+src/data_processing/            # metadata preprocessing
+src/feature_extract/            # BERT / WavLM / CLIP feature extraction
+scripts/                        # MSP-IMPROV helper scripts
+metadata/                       # preprocessed split files
+feature/                        # extracted feature .pkl files
+checkpoints/                    # saved models and eval CSV files
+```
+
+## Setup
+
+Run commands from the repository root.
 
 ```bash
-python main.py \
+cd /home/minhnhutngnn/Prompt4MER
+pip install -r requirements.txt
+```
+
+If your environment uses `python` instead of `python3`, replace `python3` in the commands below.
+
+## Data Preparation
+
+Prompt4MER trains from extracted feature files in `feature/`. The expected files are:
+
+```text
+feature/IEMOCAP_BERT_LARGE_WavLM_CLIP_train.pkl
+feature/IEMOCAP_BERT_LARGE_WavLM_CLIP_val.pkl
+feature/IEMOCAP_BERT_LARGE_WavLM_CLIP_test.pkl
+feature/MSP_IMPROV_BERT_LARGE_WavLM_CLIP_train.pkl
+feature/MSP_IMPROV_BERT_LARGE_WavLM_CLIP_val.pkl
+feature/MSP_IMPROV_BERT_LARGE_WavLM_CLIP_test.pkl
+```
+
+Each sample contains text, audio, visual embeddings and a 4-class label.
+
+### MSP-IMPROV
+
+```bash
+DATA_ROOT=/path/to/MSP-IMPROV scripts/preprocess_msp_improv.sh
+WAV_BASE=/path/to/MSP-IMPROV VIDEO_BASE=/path/to/MSP-IMPROV scripts/extract_msp_improv_features.sh
+```
+
+### IEMOCAP
+
+```bash
+python3 src/data_processing/preprocess.py \
+  --dataset iemocap \
+  --data_root /path/to/IEMOCAP \
+  --output_root metadata
+
+python3 src/feature_extract/extract_feature.py \
+  --dataset iemocap \
+  --wav_base /path/to/IEMOCAP \
+  --video_base /path/to/IEMOCAP
+```
+
+## Training
+
+Stage 1 pretrains with all modalities available:
+
+```bash
+python3 main.py \
   --dataset iemocap \
   --data_path feature/ \
   --linear_layer_output 512,256 \
@@ -22,10 +121,10 @@ python main.py \
   --name ./checkpoints/iemocap_4mser_concat_pretrain.pt
 ```
 
-Fine-tune:
+Stage 2 fine-tunes with random missing-modality masks:
 
 ```bash
-python main.py \
+python3 main.py \
   --pretrained_model ./checkpoints/iemocap_4mser_concat_pretrain.pt \
   --dataset iemocap \
   --data_path feature/ \
@@ -39,69 +138,16 @@ python main.py \
   --name ./checkpoints/iemocap_4mser_concat_finetune.pt
 ```
 
-With `--num_seeds 5` and the default `--seed 32 --seed_stride 1`, training runs seeds
-`32, 33, 34, 35, 36` and writes per-seed checkpoints such as
-`iemocap_4mser_concat_finetune.seed32.pt`.
-When fine-tuning with `--pretrained_model ./checkpoints/iemocap_4mser_concat_pretrain.pt`,
-each seed automatically loads the matching pretrain checkpoint, for example seed `32`
-loads `iemocap_4mser_concat_pretrain.seed32.pt`.
-
-Run IEMOCAP missing-sampler ablation:
+For MSP-IMPROV, use `--dataset msp-improv` and MSP checkpoint names. You can also run:
 
 ```bash
-scripts/ablate_iemocap_missing.sh
-```
-
-By default this pretrains once with no synthetic missing modality, then fine-tunes/evaluates
-`max_missing_prob` from `0.0` to `1.0` with step `0.1`. `double_missing_prob` is fixed at
-`0.25`; when `max_missing_prob < 0.25`, missing samples are still randomly sampled with that
-lower missing probability.
-
-```text
-max_missing_prob = 0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0
-double_missing_prob = 0.25
-```
-
-Override the grid or skip stages with environment variables:
-
-```bash
-MAX_MISSING_VALUES="0.0 0.2 0.4 0.6 0.8 1.0" scripts/ablate_iemocap_missing.sh
-DOUBLE_MISSING_PROB=0.50 scripts/ablate_iemocap_missing.sh
-RUN_PRETRAIN=0 RUN_FINETUNE=0 RUN_EVAL=1 scripts/ablate_iemocap_missing.sh
-```
-
-Results are written under `./results/iemocap_missing_ablation/`, with one CSV per setting
-and `summary.csv` containing the one-seed result for each setting. Set `NUM_SEEDS=5` if you
-want the full five-seed mean/std run.
-
-Prepare, train, and evaluate MSP-IMPROV from `/home/minhnhutngnn/MSP-IMPROV`:
-
-```bash
-scripts/preprocess_msp_improv.sh
-scripts/extract_msp_improv_features.sh
 scripts/train_msp_improv.sh
-scripts/eval_msp_improv.sh
 ```
 
-MSP-IMPROV is treated as a 4-class classification dataset with filename labels
-`A,H,S,N` mapped to the same class order as IEMOCAP: angry, happy, sad, neutral.
-The raw MSP-IMPROV tree currently provides audio/transcripts; feature extraction allows
-missing video by default and fills the video branch with a zero embedding.
-
-Run MSP-IMPROV missing-sampler ablation:
+## Evaluation
 
 ```bash
-scripts/ablate_msp_improv_missing.sh
-```
-
-This mirrors the IEMOCAP ablation: one seed by default, `double_missing_prob=0.25`,
-and `max_missing_prob` from `0.0` to `1.0` with step `0.1`. Results are written under
-`./results/msp_improv_missing_ablation/`.
-
-Evaluate the IEMOCAP checkpoint:
-
-```bash
-python main.py \
+python3 main.py \
   --eval_only \
   --dataset iemocap \
   --data_path feature/ \
@@ -111,9 +157,16 @@ python main.py \
   --eval_modalities atv,t,a,v,at,av,tv
 ```
 
-Eval-only also follows `--num_seeds 5` by default: pass the base checkpoint path and the
-runner evaluates the matching per-seed checkpoints, then prints mean/std metrics across seeds.
-Eval-only writes CSV results by default next to the base checkpoint, for example
-`./checkpoints/iemocap_4mser_concat_finetune_eval.csv`. Use `--eval_csv <path>` to choose
-a different output file. The CSV contains one row per seed/modality plus mean and std rows
-for each modality.
+Modality cases:
+
+- `atv`: audio + text + visual
+- `t`, `a`, `v`: single observed modality
+- `at`, `av`, `tv`: two observed modalities
+
+With `--num_seeds 5`, training and evaluation use seeds `32, 33, 34, 35, 36` by default. Eval-only writes a CSV next to the checkpoint unless `--eval_csv` is provided.
+
+## Notes
+
+- Use `--max_missing_prob 0 --double_missing_prob 0` for full-modality pretraining.
+- During fine-tuning, `--max_missing_prob` controls how often samples are masked and `--double_missing_prob` controls how often two modalities are dropped.
+- The current repository is intentionally focused on IEMOCAP and MSP-IMPROV only.

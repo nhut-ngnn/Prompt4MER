@@ -15,14 +15,11 @@ from src.utils import get_loader
 
 
 OUTPUT_DIMS = {
-    "sims": 1,
     "iemocap": 4,
-    "meld": 7,
     "msp-improv": 4,
 }
 CRITERIA = {
     "iemocap": "CrossEntropyLoss",
-    "meld": "CrossEntropyLoss",
     "msp-improv": "CrossEntropyLoss",
 }
 
@@ -51,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset",
         type=str,
         default="iemocap",
-        choices=["iemocap", "meld", "msp-improv", "sims"],
+        choices=["iemocap", "msp-improv"],
     )
     parser.add_argument("--data_path", type=str, default=None)
 
@@ -74,18 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cross_attn_heads", type=int, default=0)
     parser.add_argument("--prompt_dropout", type=float, default=0.0)
     parser.add_argument("--missing_modality_dropout", type=float, default=0.0)
-    parser.add_argument(
-        "--module_ablation",
-        type=str,
-        default="full",
-        choices=[
-            "full",
-            "no_prompt_bank",
-            "no_missing_prompt",
-            "no_modality_prompt",
-        ],
-        help="dual-stream module ablation variant",
-    )
     parser.add_argument(
         "--fusion_head_output_type",
         type=str,

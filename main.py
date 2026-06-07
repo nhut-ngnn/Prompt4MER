@@ -52,8 +52,8 @@ parser.add_argument(
     "--dataset",
     type=str,
     default="iemocap",
-    choices=["iemocap", "meld", "msp-improv", "sims"],
-    help="dataset to use (iemocap, meld, msp-improv, sims)",
+    choices=["iemocap", "msp-improv"],
+    help="dataset to use (iemocap, msp-improv)",
 )
 parser.add_argument(
     "--data_path",
@@ -116,18 +116,6 @@ parser.add_argument(
     type=float,
     default=0.0,
     help="training-time probability of dropping an available modality in the dual-stream model",
-)
-parser.add_argument(
-    "--module_ablation",
-    type=str,
-    default="full",
-    choices=[
-        "full",
-        "no_prompt_bank",
-        "no_missing_prompt",
-        "no_modality_prompt",
-    ],
-    help="dual-stream module ablation variant",
 )
 parser.add_argument(
     "--fusion_head_output_type",
@@ -226,7 +214,7 @@ parser.add_argument(
 parser.add_argument(
     "--max_missing_prob",
     type=float,
-    default=0.5,
+    default=50,
     help="maximum missing-modality probability for training sampler",
 )
 parser.add_argument(
@@ -241,9 +229,9 @@ args = parser.parse_args()
 dataset = str.lower(args.dataset.strip())
 args.dataset = dataset
 
-output_dim_dict = {"sims": 1, "iemocap": 4, "meld": 7, "msp-improv": 4}
+output_dim_dict = {"iemocap": 4, "msp-improv": 4}
 
-criterion_dict = {"iemocap": "CrossEntropyLoss", "meld": "CrossEntropyLoss", "msp-improv": "CrossEntropyLoss"}
+criterion_dict = {"iemocap": "CrossEntropyLoss", "msp-improv": "CrossEntropyLoss"}
 
 
 def setup_seed(seed):

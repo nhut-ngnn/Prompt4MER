@@ -105,7 +105,6 @@ def train_model(settings, hyp_params, train_loader, valid_loader, test_loader):
         num_batches = hyp_params.n_train // hyp_params.batch_size
         is_classification_dataset = hyp_params.dataset in {
             "iemocap",
-            "meld",
             "msp-improv",
         }
         use_dataparallel = bool(getattr(hyp_params, "use_dataparallel", False))
