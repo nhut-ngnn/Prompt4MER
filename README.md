@@ -1,7 +1,7 @@
 # Prompt4MER: Prompt-Guided Missing Modality Completion for Multimodal Emotion Recognition
 
 > Official code repository for the manuscript 
-  <b>"Prompt-Guided Missing Modality Completion for Multimodal Emotion Recognition"</b>, submitted to <a href="https://www.ieice.org/cs/icm/apnoms/2026/index.html">The 26th Asia-Pacific Network Operations and Management Symposium</a>.
+  <b>"Prompt-Guided Missing Modality Completion for Multimodal Emotion Recognition"</b>, submitted to <a href="https://apsipa2026.org/">2026 Asia Pacific Signal and Information Processing Association Annual Summit and Conference (APSIPA ASC)</a>.
 
 > Please press ⭐ button and/or cite papers if you feel helpful.
 
