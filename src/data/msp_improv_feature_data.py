@@ -14,8 +14,13 @@ class MSPIMPROVFeatureData(IEMOCAPFeatureData):
                 preferred_tokens.append(str(token).lower())
 
         primary_pattern = os.path.join(data_path, f"{self.DATASET_GLOB}_*_{split_name}.pkl")
-        fallback_pattern = os.path.join(data_path, f"*{split_name}.pkl")
-        candidates = sorted(set(glob.glob(primary_pattern) + glob.glob(fallback_pattern)))
+        primary_candidates = sorted(glob.glob(primary_pattern))
+
+        if primary_candidates:
+            candidates = primary_candidates
+        else:
+            fallback_pattern = os.path.join(data_path, f"*{split_name}.pkl")
+            candidates = sorted(glob.glob(fallback_pattern))
 
         if not candidates:
             raise FileNotFoundError(
